@@ -1,0 +1,21 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "guru"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "laya>=0.3.6",
+    "mcp>=2.2.0,<3",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "anyio>=4.0"]
+
+[project.scripts]
+guru-mcp = "guru.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/guru"]
