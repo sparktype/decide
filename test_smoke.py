@@ -10,25 +10,37 @@ from mcp import Client, StdioServerParameters
 
 
 async def run() -> None:
+    # noul은 질문 문구에 민감하다 — "Is this a positive review?"처럼 반문형으로
+    # 물으면 방향이 무너지는 것을 확인했다. "Does the customer express
+    # satisfaction?"처럼 상태를 직접 묻는 문구는 안정적으로 방향을 구분한다.
+    # (체크포인트 confidence 보정 문제가 아니라 문구 민감성이 원인이었다.)
     params = StdioServerParameters(command=sys.executable, args=["-m", "guru.server"])
     async with Client(params) as client:
-        result = await client.call_tool(
+        positive = await client.call_tool(
             "decide",
             {
                 "state": "This was absolutely the best service I've ever had. Highly recommend!",
                 "type": "noul",
-                "instructions": "Is this a positive review?",
+                "instructions": "Does the customer express satisfaction?",
             },
         )
-        assert not result.is_error, result.content
-        body = result.structured_content
-        noul_prob = body["answer"]["noul"]
-        assert 0.0 <= noul_prob <= 1.0, f"확률 범위 밖: {noul_prob}"
-        assert isinstance(body["latency_ms"], (int, float))
-        # 이 테스트는 배관(MCP stdio 왕복, 응답 shape)만 검증한다. 모델의 판단
-        # 방향(맞았는지)은 검증하지 않는다 — 다운로드된 체크포인트가 confidence
-        # 보정 문제를 안고 있다고 laya 자체가 런타임 경고로 밝히기 때문이다.
-        print(f"OK: noul={noul_prob:.3f}, latency_ms={body['latency_ms']:.1f}")
+        negative = await client.call_tool(
+            "decide",
+            {
+                "state": "This was the worst experience. Never coming back.",
+                "type": "noul",
+                "instructions": "Does the customer express satisfaction?",
+            },
+        )
+        assert not positive.is_error, positive.content
+        assert not negative.is_error, negative.content
+
+        pos_prob = positive.structured_content["answer"]["noul"]
+        neg_prob = negative.structured_content["answer"]["noul"]
+        assert 0.0 <= pos_prob <= 1.0, f"확률 범위 밖: {pos_prob}"
+        assert 0.0 <= neg_prob <= 1.0, f"확률 범위 밖: {neg_prob}"
+        assert pos_prob > neg_prob, f"긍정/부정 구분 실패: pos={pos_prob}, neg={neg_prob}"
+        print(f"OK: positive={pos_prob:.3f}, negative={neg_prob:.3f}")
 
 
 if __name__ == "__main__":

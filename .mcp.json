@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "guru": {
-      "command": "guru-mcp",
+      "command": "/Users/spark/Develop/Workspaces/guru/.venv/bin/guru-mcp",
       "args": []
     }
   }

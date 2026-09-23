@@ -1,3 +1,4 @@
+# _decide_impl(순수 함수, predict_fn 주입)의 검증/변환/응답 조립 로직 테스트
 import pytest
 
 from guru.server import DecideResult, _decide_impl
@@ -51,6 +52,11 @@ def test_choice_requires_at_least_two_options():
 def test_choice_requires_options_present():
     with pytest.raises(ValueError, match="옵션"):
         _decide_impl("text", "choice", "골라라", None, None, lambda s, q: {})
+
+
+def test_choice_rejects_duplicate_options():
+    with pytest.raises(ValueError, match="옵션"):
+        _decide_impl("text", "choice", "골라라", ["a", "a"], None, lambda s, q: {})
 
 
 def test_score_requires_at_least_two_criteria():

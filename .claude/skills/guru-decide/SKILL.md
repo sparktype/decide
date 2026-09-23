@@ -6,8 +6,10 @@ description: Use when you need a fast, calibrated categorical/ordinal/probabilit
 # guru decide
 
 로컬에 상주하는 Laya 판단 모델을 `decide` MCP tool로 호출해, 개방형 추론 대신
-빠르고 보정된(calibrated) 판단을 받는다. 텍스트를 생성하지 않고 확률/점수/선택을
-직접 반환하므로 환각이 없다.
+빠른 판단을 받는다. 텍스트를 생성하지 않고 확률/점수/선택을 직접 반환하므로
+JSON 파싱 실패나 형식 이탈은 없다 — 다만 판단 자체의 정확도는 질문 문구에 따라
+크게 달라질 수 있다(아래 "주의" 참고). "환각이 없다"는 형식에 대한 것이지 정확도를
+보장한다는 뜻이 아니다.
 
 ## 언제 쓰는가
 
@@ -40,6 +42,15 @@ description: Use when you need a fast, calibrated categorical/ordinal/probabilit
   맥락에서 직접 임계값(예: 0.5)을 적용해라.
 - `choice`의 `answer.choice`가 선택된 라벨, `answer.confidence`가 신뢰도다.
 - `score`의 `answer.score`가 기대값(0부터 등급 개수-1 사이)이다.
+
+## 주의: noul은 질문 문구에 민감하다
+
+`instructions`를 "Is this a positive review?"처럼 반문형으로 쓰면 판단 방향이
+무너지는 것을 확인했다. "Does the customer express satisfaction?"처럼 상태를
+직접 서술적으로 묻는 문구가 더 안정적이다. `noul` 결과를 신뢰해 자동으로 행동을
+분기하기 전에, 애매한 케이스라면 대조되는 예시로 방향이 실제로 뒤집히는지
+한 번 확인해라. 참/거짓이 명확히 갈리는 판단이 중요하다면 `noul` 대신 명시적인
+`choice`(예: `options=["positive","negative"]`)가 더 안정적이다.
 
 ## 실패 시
 

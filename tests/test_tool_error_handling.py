@@ -1,3 +1,4 @@
+# 입력 검증 실패와 예상 못한 예외가 모두 ToolError로 변환되는지 테스트
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 

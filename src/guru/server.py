@@ -1,3 +1,5 @@
+# 로컬 laya 판단 모델을 choice/score/noul MCP tool로 노출하는 stdio 서버
+import threading
 import time
 from typing import Callable, Literal
 
@@ -27,8 +29,8 @@ def _decide_impl(
     question: dict = {"type": type, "instructions": instructions}
 
     if type == "choice":
-        if not options or len(options) < 2:
-            raise ValueError("choice 타입은 옵션이 최소 2개 필요합니다")
+        if not options or len(set(options)) < 2:
+            raise ValueError("choice 타입은 서로 다른 옵션이 최소 2개 필요합니다")
         question["criteria"] = {o: o for o in options}
     elif type == "score":
         if not criteria or len(criteria) < 2:
@@ -50,13 +52,16 @@ def _decide_impl(
 
 
 _router_singleton = None
+_router_lock = threading.Lock()
 
 
 def build_router_predict_fn() -> PredictFn:
     def predict(state: str, questions: dict) -> dict:
         global _router_singleton
         if _router_singleton is None:
-            _router_singleton = laya.Router(preload=True)
+            with _router_lock:
+                if _router_singleton is None:
+                    _router_singleton = laya.Router(preload=True)
         return _router_singleton.predict(state, questions)
 
     return predict
