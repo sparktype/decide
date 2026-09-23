@@ -1,6 +1,7 @@
 import time
 from typing import Callable, Literal
 
+import laya
 from pydantic import BaseModel
 
 
@@ -44,3 +45,16 @@ def _decide_impl(
         routing=result.get("routing", {}),
         latency_ms=latency_ms,
     )
+
+
+_router_singleton = None
+
+
+def build_router_predict_fn() -> PredictFn:
+    def predict(state: str, questions: dict) -> dict:
+        global _router_singleton
+        if _router_singleton is None:
+            _router_singleton = laya.Router(preload=True)
+        return _router_singleton.predict(state, questions)
+
+    return predict
