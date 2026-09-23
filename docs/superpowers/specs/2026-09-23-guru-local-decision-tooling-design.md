@@ -7,10 +7,17 @@ TypeSafe AI가 2026년 9월 출시한 "Jev"는 텍스트 생성 대신 선택지
 비자기회귀 의사결정 모델이다. API 전용이며 공개 가중치가 없어 로컬 실행이 불가능하다.
 
 `Laya`(Convai Innovations, PyPI `laya`)는 이 방식의 오픈 가중치 대안이다.
-ModernBERT-large(421M, context 512) 기반, ONNX Runtime으로 구동되며 PyTorch 없이도
-동작한다. 가중치(~1.7GB, fp32 ONNX)는 최초 실행 시 Hugging Face에서 내려받아
-`~/.cache`에 캐싱된다. 응답 지연은 수백 ms 수준으로, 매 호출 LLM 추론보다 훨씬 싸고
-빠르게 "구조화된 판단"을 낼 수 있다.
+공식 Python SDK는 `torch>=2.0`, `transformers>=4.48`, `huggingface_hub`,
+`safetensors`, `numpy`에 의존하며, 세 개의 체크포인트(영어 전용 `laya`/ModernBERT-large
+421M, 다국어 `laya-multilingual`/mmBERT-base 322M, `laya-typed-decisions`)를
+언어에 따라 자동 선택하는 `Router` 클래스를 권장 진입점으로 제공한다.
+
+**중요한 제약**: `Router()`를 기본값(지연 로딩, `max_loaded=1`)으로 쓰면 언어가
+바뀔 때마다 체크포인트를 다시 빌드하며 CPU 기준 약 7~10초가 걸린다. 반드시
+`Router(preload=True)`로 모든 체크포인트를 상주시켜야 하며, 이 경우 지연시간은
+GPU 32.8ms, **CPU 193~464ms** 수준(공식 벤치마크 실측치)이다. 이 프로젝트가 다루는
+Mac 환경은 CPU(또는 PyTorch MPS) 추론이므로, "150ms 판단"은 GPU 기준 수치이고 로컬
+환경에서는 요청당 수백 ms를 기대해야 한다 — 그래도 LLM 전체 호출보다는 훨씬 빠르다.
 
 이 프로젝트(`guru`)는 이 로컬 판단 모델을 Claude Code 에이전트 워크플로우에
 Skill/Hook 형태로 연결해, 에이전트가 개방형 추론 대신 빠르고 보정된(calibrated)
@@ -57,17 +64,28 @@ Claude (guru:decide Skill)
 
 1. **`guru serve`** (Python, FastAPI + uvicorn)
    - `127.0.0.1`에만 바인딩 (외부 노출 없음)
-   - 시작 시 `laya` SDK로 모델 1회 로드 후 프로세스 상주
-   - `POST /decide`
-     - 요청: `{"type": "choice"|"score"|"noul", "question": str, "options"?: [str], "scale"?: [int, int]}`
-     - 응답: `{"answer": ..., "probs": [...], "confidence": float, "latency_ms": float}`
+   - 시작 시 `laya.Router(preload=True)`로 전 체크포인트를 1회 로드 후 프로세스 상주
+   - `POST /decide` — Laya의 실제 질문 스키마(`type`/`instructions`/`criteria`)를
+     그대로 반영한다. `criteria`는 `choice`일 때 `{옵션: 설명}` dict, `score`일 때
+     순서 있는 등급 설명 리스트, `noul`일 때는 생략.
+     - 요청: `{"state": str|object, "type": "choice"|"score"|"noul", "instructions": str, "criteria"?: dict|list}`
+     - 내부적으로 `router.predict(state, {"q": {"type":..., "instructions":..., **criteria}})` 호출
+     - 응답: `{"answer": <result["answers"]["q"]>, "routing": <result["routing"]>, "latency_ms": float}`
+       - `answer`는 타입별로 모양이 다르다: choice → `{"choice": str, "confidence": float, ...}`,
+         score → `{"score": float, "confidence": float, ...}`,
+         noul → `{"noul": float}` (0.0~1.0 확률 — boolean이 아니다)
    - `GET /health` — 상태 확인용
    - 기동 시 실제 바인딩 포트와 PID를 `~/.cache/guru/daemon.json`에 기록 (기본 포트 사용 불가 시 빈 포트로 폴백)
 
 2. **`guru` CLI** (Python entry point, HTTP 클라이언트)
-   - `guru decide --type boolean --question "..."`
-   - `guru decide --type choice --question "..." --options "a,b,c"`
-   - `guru decide --type score --question "..." --scale 1,5`
+   - `guru decide --type noul --question "..." --state "..."`
+   - `guru decide --type choice --question "..." --state "..." --options "a,b,c"`
+     (`--options`는 `{a: "a", b: "b", c: "c"}` 형태의 최소 criteria로 자동 변환되는
+     설탕 문법. 옵션별 설명이 필요하면 이후 필요 시 `--criteria-json` 확장)
+   - `guru decide --type score --question "..." --state "..." --criteria "low,medium,high"`
+     (등급을 낮은 순서대로 콤마 나열 → 순서 있는 rubric 리스트로 변환)
+   - `--question`은 Laya의 `instructions`(고정 판단 기준)에 대응하고, `--state`는
+     판단 대상 내용(문장/이메일/JSON 등)에 대응한다. 개념이 다르므로 CLI에서도 분리한다
    - `guru serve` / `guru stop` / `guru status` (수동 제어용)
    - 기본 출력: JSON(기계 소비용). `--pretty` 옵션으로 사람이 읽기 좋은 포맷
    - `decide` 호출 시 데몬 미기동이면 자동으로 `guru serve`를 백그라운드 스폰하고
@@ -105,8 +123,9 @@ Claude (guru:decide Skill)
 
 프레임워크 없이 최소 1개의 실행 가능한 스모크 테스트:
 
-- `test_smoke.py` — `guru serve`를 띄운 뒤 `guru decide --type boolean --question
-  "2+2=4?"`를 호출해 `answer == True`이고 `probs` 합이 1에 근접함을 assert로 확인.
+- `test_smoke.py` — `guru serve`를 띄운 뒤
+  `guru decide --type noul --question "이 문장이 수학적으로 참인가?" --state "2+2=4"`를
+  호출해 `answer["noul"]`이 0.0~1.0 사이의 float이고 0.5보다 큼을 assert로 확인.
   `python test_smoke.py`로 직접 실행 가능(pytest 불필요).
 
 ## 향후 확장 (이번 스펙 범위 아님)
