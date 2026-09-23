@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "guru": {
+      "command": "guru-mcp",
+      "args": []
+    }
+  }
+}
