@@ -2,6 +2,8 @@ import time
 from typing import Callable, Literal
 
 import laya
+from mcp.server import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import BaseModel
 
 
@@ -58,3 +60,42 @@ def build_router_predict_fn() -> PredictFn:
         return _router_singleton.predict(state, questions)
 
     return predict
+
+
+def _decide_tool_body(
+    state: str,
+    type: Literal["choice", "score", "noul"],
+    instructions: str,
+    options: list[str] | None,
+    criteria: list[str] | None,
+) -> DecideResult:
+    try:
+        return _decide_impl(state, type, instructions, options, criteria, build_router_predict_fn())
+    except Exception as exc:
+        raise ToolError(str(exc)) from exc
+
+
+mcp = MCPServer("guru")
+
+
+@mcp.tool()
+def decide(
+    state: str,
+    type: Literal["choice", "score", "noul"],
+    instructions: str,
+    options: list[str] | None = None,
+    criteria: list[str] | None = None,
+) -> DecideResult:
+    """여러 선택지 중 고르기(choice), 순서형 점수 매기기(score), 또는 참에 가까운
+    확률 추정(noul)이 필요할 때 로컬 Laya 판단 모델을 단일 순전파로 호출한다.
+    개방형 추론/생성 작업에는 사용하지 않는다. noul의 결과는 boolean이 아니라
+    0.0~1.0 확률이다."""
+    return _decide_tool_body(state, type, instructions, options, criteria)
+
+
+def main() -> None:
+    mcp.run()
+
+
+if __name__ == "__main__":
+    main()
