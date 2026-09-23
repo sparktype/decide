@@ -3,6 +3,12 @@
     "guru": {
       "command": "/Users/spark/Develop/Workspaces/guru/.venv/bin/guru-mcp",
       "args": []
+    },
+    "graft": {
+      "command": "graft",
+      "args": [
+        "mcp"
+      ]
     }
   }
 }
