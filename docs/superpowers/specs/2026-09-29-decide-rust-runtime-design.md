@@ -72,8 +72,7 @@ choice 옵션이 256개 이상이면 TypeSafe 백엔드는 호출 전에 오류�
 이 저장소의 `.mcp.json` 명령은 그 절대 경로다. `args`는 비운다. `env`에
 키를 넣지 않는다. `DECIDE_BACKEND`를 파일에 고정하지 않으면 키가 있는
 환경에서는 TypeSafe, 없는 환경에서는 로컬이 된다.
-`tests/test_project_config.py`의 `.venv` 경로 검사는 이 절대 경로 검사로
-바뀐다.
+경로 검사는 Rust 테스트로 옮긴 뒤 Python 테스트를 지운다.
 
 로컬 가중치는 병목에 넣지 않는다. `LAYA_WEIGHTS`가 있으면 그 디렉터리를
 쓰고, 없으면 `~/.cache/huggingface/hub`의 `convaiinnovations/laya`
@@ -88,8 +87,7 @@ choice 옵션이 256개 이상이면 TypeSafe 백엔드는 호출 전에 오류�
 - TypeSafe와 로컬 사이를 호출마다 자동으로 오가기.
 - 비공식 Jev 프록시, OpenRouter, Vercel, Cloudflare 경로.
 - Intel Mac과 Linux bottle. 첫 formula는 이 머신과 같은 arm64 macOS다.
-- Python 패키지를 지우는 것. `laya` 0.3.6과의 로컬 비교용으로 남긴다.
-  사용자 설치 문서의 절차는 Homebrew다.
+- 검증 전에 Python 구현을 지우는 것. 비교와 픽스처 생성이 끝난 뒤에만 지운다.
 
 ## 로컬 런타임
 
@@ -216,8 +214,8 @@ score의 `criteria`는 등급 리스트다. noul은 `criteria` 없이 보낸다.
   `pytest`에 넣지 않는다.
 - 로컬 골든 입력은 영어 noul, 옵션 2개인 choice, 옵션 11개 이상인 choice,
   등급 3개인 score, 한글 state다. 한글은 다국어 체크포인트여야 한다.
-- `pytest`는 Python 서버가 남아 있는 동안 통과한다. `.mcp.json` 경로 검사와
-  `stop_verify.py`의 기동 명령 검사는 이 스펙의 끝 상태에서 갱신한다.
+- `.mcp.json`이 `/opt/homebrew/bin/decide`를 가리키는 검사는 Rust 테스트에
+  둔다. `stop_verify.py`의 기동 명령 검사도 정리 전에 그 명령 기준으로 고친다.
 
 ## 구현 순서
 
@@ -225,10 +223,50 @@ score의 `criteria`는 등급 리스트다. noul은 `criteria` 없이 보낸다.
 2. `decide mcp`, `decide daemon`, Homebrew formula. 이 시점의 로컬 백엔드는
    준비되지 않았다는 오류를 반환한다.
 3. `.mcp.json`을 `/opt/homebrew/bin/decide`로 두고 `stop_verify.py`가
-   `decide daemon`을 띄우게 한다.
+   `decide daemon`을 띄우게 한다. 이 변경과 함께 경로 검사는 Rust 테스트로
+   옮긴다.
 4. 로컬 시퀀스, 후처리, 라우팅 픽스처.
 5. ONNX 비교. 게시 필드가 다르면 Candle로 같은 비교를 하고, 통과한 런타임만
    로컬 백엔드에 연결한다.
+6. 아래 실행 검증을 통과하면 이전 Python 구현을 저장소에서 지운다.
 
 1단계는 로컬 런타임 코드를 크레이트에 남기지 않는다. 5단계가 게시 필드
-기준을 통과하기 전에는 로컬 백엔드가 추론을 수행하지 않는다.
+기준을 통과하기 전에는 로컬 백엔드가 추론을 수행하지 않는다. 6단계는
+실행 검증 전에 하지 않는다.
+
+## 실행 검증 뒤 정리
+
+실행 검증은 Homebrew로 깔린 `/opt/homebrew/bin/decide`에 대해 다음이 모두
+통과한 상태다.
+
+- `cargo test`가 통과한다. 로컬 게시 필드 비교(`cargo test --features parity`)도
+  통과한다.
+- 키가 있는 환경에서 TypeSafe 백엔드로 `decide` 도구를 한 번 호출하면
+  `routing.backend`가 `typesafe`인 답이 온다.
+- `DECIDE_BACKEND=local`로 같은 도구를 한 번 호출하면 `routing.backend`가
+  `local`인 답이 오고, 한글 state는 다국어 체크포인트로 간다.
+- 데몬 소켓에 JSON 한 줄을 보내면 같은 껍데기의 답이 돌아온다.
+
+이 네 가지가 끝나기 전에는 Python 구현을 지우지 않는다. 네 가지가 끝나면
+같은 변경에서 이전 구현을 지운다.
+
+지우는 것:
+
+- `src/decide/`
+- `tests/`의 Python 테스트
+- `test_smoke.py`
+- `pyproject.toml`, `.python-version`
+- 로컬 게이트에서 ONNX를 만들 때 쓴 Python 스크립트
+- README와 `CLAUDE.md`의 `pip`, `.venv`, `pytest` 설치와 실행 절차
+
+남기는 것:
+
+- `crates/decide`와 `packaging/homebrew/decide.rb`
+- 로컬 회귀에 쓰는 JSON 픽스처. 이것은 옛 서버가 아니라 Rust 테스트 입력이다.
+- `.claude/skills/decide/SKILL.md`. 두 백엔드 설명으로 고친다.
+- `.claude/hooks/stop_verify.py`. 모델 서버가 아니라 훅이며, 기동 대상만
+  `decide daemon`이다.
+- `docs/superpowers/`의 지난 설계 문서.
+
+체크아웃의 `.venv`는 저장소에 없으므로 커밋 대상이 아니다. 검증이 끝나면
+그 디렉터리도 삭제한다. 이후 이 저장소의 테스트 명령은 `cargo test`다.
