@@ -45,7 +45,7 @@ def should_block(confidence: float) -> bool:
 
 def ensure_daemon_started() -> None:
     subprocess.Popen(
-        [sys.executable, "-m", "decide.decide_daemon"],
+        ["/opt/homebrew/bin/decide", "daemon"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         start_new_session=True,

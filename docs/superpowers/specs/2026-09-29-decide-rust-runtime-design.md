@@ -64,9 +64,9 @@ choice 옵션이 256개 이상이면 TypeSafe 백엔드는 호출 전에 오류�
 ## 설치
 
 사용자 설치는 Homebrew formula `decide`다. formula 파일은
-`packaging/homebrew/decide.rb`다. 이 머신에서는
-`brew install --formula packaging/homebrew/decide.rb`로 깔고, 바이너리는
-`/opt/homebrew/bin/decide`에 둔다. formula는 Rust 크레이트를 빌드해 실행
+`packaging/homebrew/decide.rb`다. 이 머신의 Homebrew 7에서는
+`HOMEBREW_DEVELOPER=1 brew install --formula ./packaging/homebrew/decide.rb`로 깐다.
+바이너리는 `/opt/homebrew/bin/decide`에 둔다. formula는 Rust 크레이트를 빌드해 실행
 파일만 설치한다. Python, torch, 가중치, API 키는 formula에 없다.
 
 이 저장소의 `.mcp.json` 명령은 그 절대 경로다. `args`는 비운다. `env`에
