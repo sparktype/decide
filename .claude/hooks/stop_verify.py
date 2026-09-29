@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Stop 훅: 상주 Determination 데몬(decide)에게 이 세션의 코드 변경이 테스트로 검증됐는지 물어, 근거가 약하면 완료를 막는다
+# Stop 훅: 상주 decide 데몬에게 이 세션의 코드 변경이 테스트로 검증됐는지 물어, 근거가 약하면 완료를 막는다
 import json
 import socket
 import subprocess
@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SOCKET_PATH = Path.home() / ".cache" / "determination" / "decide.sock"
+SOCKET_PATH = Path.home() / ".cache" / "decide" / "decide.sock"
 TEST_MARKERS = ("pytest", "npm test", "npm run test", "cargo test", "go test")
 THRESHOLD = 0.4  # ponytail: 고정 임계값, 오탐 잦으면 조정
 CONNECT_TIMEOUT_S = 0.5
@@ -45,7 +45,7 @@ def should_block(confidence: float) -> bool:
 
 def ensure_daemon_started() -> None:
     subprocess.Popen(
-        [sys.executable, "-m", "determination.decide_daemon"],
+        [sys.executable, "-m", "decide.decide_daemon"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         start_new_session=True,
@@ -99,7 +99,7 @@ def main() -> None:
 
     resp = ask_daemon(state)
     if not resp or "error" in resp:
-        return  # Determination 데몬 사용 불가하면 막지 않는다
+        return  # decide 데몬 사용 불가하면 막지 않는다
 
     confidence = resp["answer"]["noul"]
     if should_block(confidence):

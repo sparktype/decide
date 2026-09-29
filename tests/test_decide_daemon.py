@@ -2,7 +2,7 @@
 import json
 import socket
 
-from determination.decide_daemon import _handle
+from decide.decide_daemon import _handle
 
 
 def test_handle_returns_noul_answer_over_socket():

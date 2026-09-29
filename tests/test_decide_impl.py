@@ -1,7 +1,7 @@
 # _decide_impl(순수 함수, predict_fn 주입)의 검증/변환/응답 조립 로직 테스트
 import pytest
 
-from determination.server import DecideResult, _decide_impl
+from decide.server import DecideResult, _decide_impl
 
 
 def test_noul_builds_question_without_criteria():

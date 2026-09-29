@@ -1,9 +1,9 @@
 ---
-name: determination-decide
-description: Use when you need a fast, calibrated categorical/ordinal/probability-style judgment (pick one of several options, rate on an ordered scale, or estimate how likely something is) instead of open-ended reasoning. Calls the Determination MCP server's decide tool, backed by the local Laya decision model.
+name: decide
+description: Use when you need a fast, calibrated categorical/ordinal/probability-style judgment (pick one of several options, rate on an ordered scale, or estimate how likely something is) instead of open-ended reasoning. Calls the decide MCP server's decide tool, backed by the local Laya decision model.
 ---
 
-# Determination decide
+# decide
 
 로컬에 상주하는 Laya 판단 모델을 `decide` MCP tool로 호출해, 개방형 추론 대신
 빠른 판단을 받는다. 텍스트를 생성하지 않고 확률/점수/선택을 직접 반환하므로

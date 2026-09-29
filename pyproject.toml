@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "determination"
+name = "decide"
 version = "0.1.0"
 requires-python = ">=3.10"
 dependencies = [
@@ -15,7 +15,7 @@ dependencies = [
 dev = ["pytest>=8.0", "anyio>=4.0"]
 
 [project.scripts]
-determination-mcp = "determination.server:main"
+decide-mcp = "decide.server:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/determination"]
+packages = ["src/decide"]

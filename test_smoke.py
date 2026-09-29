@@ -1,4 +1,4 @@
-"""Determination decide MCP 서버 엔드투엔드 스모크 테스트. 실제 Laya 가중치를
+"""decide MCP 서버 엔드투엔드 스모크 테스트. 실제 Laya 가중치를
 다운로드/로드하므로 네트워크가 필요하고 최초 실행은 수 분이 걸릴 수 있다.
 수동 실행:
     python test_smoke.py
@@ -14,7 +14,7 @@ async def run() -> None:
     # 물으면 방향이 무너지는 것을 확인했다. "Does the customer express
     # satisfaction?"처럼 상태를 직접 묻는 문구는 안정적으로 방향을 구분한다.
     # (체크포인트 confidence 보정 문제가 아니라 문구 민감성이 원인이었다.)
-    params = StdioServerParameters(command=sys.executable, args=["-m", "determination.server"])
+    params = StdioServerParameters(command=sys.executable, args=["-m", "decide.server"])
     async with Client(params) as client:
         positive = await client.call_tool(
             "decide",
