@@ -4,9 +4,9 @@ import socket
 import sys
 from pathlib import Path
 
-from guru.server import DecideResult, _decide_impl, build_router_predict_fn
+from determination.server import DecideResult, _decide_impl, build_router_predict_fn
 
-SOCKET_PATH = Path.home() / ".cache" / "guru" / "decide.sock"
+SOCKET_PATH = Path.home() / ".cache" / "determination" / "decide.sock"
 IDLE_TIMEOUT_S = 30 * 60  # ponytail: 30분 무요청 시 자동 종료, 필요하면 조정
 
 

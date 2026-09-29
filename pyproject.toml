@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "guru"
+name = "determination"
 version = "0.1.0"
 requires-python = ">=3.10"
 dependencies = [
@@ -15,7 +15,7 @@ dependencies = [
 dev = ["pytest>=8.0", "anyio>=4.0"]
 
 [project.scripts]
-guru-mcp = "guru.server:main"
+determination-mcp = "determination.server:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/guru"]
+packages = ["src/determination"]

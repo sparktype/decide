@@ -80,7 +80,7 @@ def _decide_tool_body(
         raise ToolError(str(exc)) from exc
 
 
-mcp = MCPServer("guru")
+mcp = MCPServer("Determination")
 
 
 @mcp.tool()

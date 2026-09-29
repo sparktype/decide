@@ -1,7 +1,7 @@
 {
   "mcpServers": {
-    "guru": {
-      "command": "/Users/spark/Develop/Workspaces/guru/.venv/bin/guru-mcp",
+    "Determination": {
+      "command": "/Users/spark/Develop/Workspaces/Determination/.venv/bin/determination-mcp",
       "args": []
     },
     "graft": {

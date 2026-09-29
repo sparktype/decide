@@ -1,5 +1,7 @@
 # guru MCP 서버(decide tool) + Skill Implementation Plan
 
+2026-09-29에 이 프로젝트의 이름은 Determination이다. 아래 태스크 기록은 처음 만들 때의 경로를 그대로 둔다.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Claude Code가 세션당 1회 stdio로 스폰하는 `guru` MCP 서버에서, 로컬 Laya 판단 모델(choice/score/noul)을 `decide` tool로 호출할 수 있게 한다.

@@ -1,9 +1,9 @@
 ---
-name: guru-decide
-description: Use when you need a fast, calibrated categorical/ordinal/probability-style judgment (pick one of several options, rate on an ordered scale, or estimate how likely something is) instead of open-ended reasoning. Calls the guru MCP server's decide tool, backed by the local Laya decision model.
+name: determination-decide
+description: Use when you need a fast, calibrated categorical/ordinal/probability-style judgment (pick one of several options, rate on an ordered scale, or estimate how likely something is) instead of open-ended reasoning. Calls the Determination MCP server's decide tool, backed by the local Laya decision model.
 ---
 
-# guru decide
+# Determination decide
 
 로컬에 상주하는 Laya 판단 모델을 `decide` MCP tool로 호출해, 개방형 추론 대신
 빠른 판단을 받는다. 텍스트를 생성하지 않고 확률/점수/선택을 직접 반환하므로
@@ -55,5 +55,4 @@ JSON 파싱 실패나 형식 이탈은 없다 — 다만 판단 자체의 정확
 ## 실패 시
 
 tool 호출이 에러로 돌아오면(모델 로드 실패, 입력 검증 실패 등) 작업을 막지 말고
-평소처럼 직접 추론해서 계속 진행해라 — guru는 있으면 좋은 가속 수단이지, 필수
-의존성이 아니다.
+직접 추론해서 계속 진행한다.

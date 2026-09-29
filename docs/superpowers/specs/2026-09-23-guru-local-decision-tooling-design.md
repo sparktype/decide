@@ -1,4 +1,4 @@
-# guru: 로컬 판단 모델 기반 에이전트 사용성 도구
+# Determination: 로컬 판단 모델 기반 에이전트 사용성 도구
 
 ## 배경
 
@@ -19,12 +19,13 @@ GPU 32.8ms, **CPU 193~464ms** 수준(공식 벤치마크 실측치)이다. 이 �
 Mac 환경은 CPU(또는 PyTorch MPS) 추론이므로, "150ms 판단"은 GPU 기준 수치이고 로컬
 환경에서는 요청당 수백 ms를 기대해야 한다 — 그래도 LLM 전체 호출보다는 훨씬 빠르다.
 
-이 프로젝트(`guru`)는 이 로컬 판단 모델을 Claude Code 에이전트 워크플로우에
+이 프로젝트(`Determination`)는 이 로컬 판단 모델을 Claude Code 에이전트 워크플로우에
 연결해, 에이전트가 개방형 추론 대신 빠르고 보정된(calibrated) 판단을 활용할 수
 있게 하는 도구를 만든다.
 
 **이름에 대해**: "Jev"는 TypeSafe AI의 제품명이므로 이 도구에는 사용하지 않는다.
-서버/스킬 이름은 모두 `guru`로 통일한다.
+2026-09-29에 프로젝트 이름을 `Determination`으로 바꿨다. 서버 이름은 `Determination`,
+패키지와 스킬 파일 이름은 `determination`이다.
 
 **전송 방식 결정**: 최초 설계는 HTTP 데몬 + CLI였으나, "stdio로 통신하면 어떨지"라는
 요청을 검토한 결과 **MCP(Model Context Protocol) 서버로 전환**하기로 했다. 이유는
@@ -33,11 +34,11 @@ Mac 환경은 CPU(또는 PyTorch MPS) 추론이므로, "150ms 판단"은 GPU 기
 ## 목표 / 범위
 
 **1단계(이번 스펙 범위)**
-- `guru` MCP 서버: `laya.Router(preload=True)`를 프로세스 시작 시 1회 로드해
+- `Determination` MCP 서버: `laya.Router(preload=True)`를 프로세스 시작 시 1회 로드해
   상주시키고, `decide` tool 하나를 stdio로 노출
-- 프로젝트 `.mcp.json`에 `guru`를 등록해 Claude Code가 세션당 1번 서버 프로세스를
+- 프로젝트 `.mcp.json`에 `Determination`을 등록해 Claude Code가 세션당 1번 서버 프로세스를
   스폰하고 세션 내내 stdio 파이프를 유지하도록 함
-- `guru-decide` Claude Code Skill: 에이전트가 언제/어떻게 `decide` tool을
+- `determination-decide` Claude Code Skill: 에이전트가 언제/어떻게 `decide` tool을
   호출해야 하는지, 실패 시 어떻게 폴백해야 하는지 안내
 
 **2단계(별도 브레인스토밍, 이번 스펙 범위 아님)**
@@ -63,7 +64,7 @@ Mac 환경은 CPU(또는 PyTorch MPS) 추론이므로, "150ms 판단"은 GPU 기
 Claude Code (MCP host)
         │ 세션 시작 시 1회 스폰, stdio 파이프 유지
         ▼
-   guru MCP 서버 (상주, laya.Router(preload=True) 로드)
+   Determination MCP 서버 (상주, laya.Router(preload=True) 로드)
         │ tool: decide(state, type, instructions, options?, criteria?)
         ▼
    결과 반환 (JSON-RPC over stdio, MCP 프로토콜이 처리)
@@ -75,7 +76,7 @@ Claude Code (MCP host)
 
 ### 컴포넌트
 
-1. **`guru` MCP 서버** (Python, `mcp` SDK — PyPI `mcp` 2.x, `mcp.server.MCPServer`)
+1. **`Determination` MCP 서버** (Python, `mcp` SDK — PyPI `mcp` 2.x, `mcp.server.MCPServer`)
    - `decide` tool 하나를 노출:
      - 파라미터: `state: str`, `type: Literal["choice","score","noul"]`,
        `instructions: str`, `options: list[str] | None`(choice용),
@@ -93,11 +94,11 @@ Claude Code (MCP host)
    - 프로세스 시작/종료는 전적으로 Claude Code(MCP host)가 `.mcp.json` 설정에 따라 관리
 
 2. **`.mcp.json`** (프로젝트 루트)
-   - Claude Code가 세션 시작 시 `guru` MCP 서버를 stdio로 스폰하도록 등록
-   - `{"mcpServers": {"guru": {"command": "guru-mcp", "args": []}}}` 형태
-     (`guru-mcp`는 `pip install -e .`로 설치되는 콘솔 스크립트)
+   - Claude Code가 세션 시작 시 `Determination` MCP 서버를 stdio로 스폰하도록 등록
+   - `{"mcpServers": {"Determination": {"command": "determination-mcp", "args": []}}}` 형태
+     (`determination-mcp`는 `pip install -e .`로 설치되는 콘솔 스크립트)
 
-3. **`guru-decide` Skill** (`.claude/skills/guru-decide/SKILL.md`)
+3. **`determination-decide` Skill** (`.claude/skills/determination-decide/SKILL.md`)
    - 언제 쓰는지: 여러 선택지 중 고르기, 참거짓에 가까운 확률 판단, 순서형 점수
      매기기처럼 빠르고 보정된 판단이 필요할 때 전체 추론 대신 `decide` tool 호출
    - 언제 안 쓰는지: 개방형 추론·생성·설명이 필요한 작업에는 사용 안 함
@@ -108,7 +109,7 @@ Claude Code (MCP host)
 
 ## 데이터 흐름
 
-1. Claude Code가 세션 시작 시 `.mcp.json`을 읽고 `guru` MCP 서버를 stdio
+1. Claude Code가 세션 시작 시 `.mcp.json`을 읽고 `Determination` MCP 서버를 stdio
    subprocess로 스폰(최초 tool 호출 전까지 모델은 아직 로드되지 않음)
 2. Skill 지시에 따라 Claude가 `decide` tool을 호출(JSON-RPC over stdio, MCP
    프로토콜이 직렬화/역직렬화 처리)

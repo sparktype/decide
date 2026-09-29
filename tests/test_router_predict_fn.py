@@ -2,7 +2,7 @@
 import threading
 import time
 
-import guru.server as server_module
+import determination.server as server_module
 
 
 def test_build_router_predict_fn_preloads_once_and_reuses(monkeypatch):

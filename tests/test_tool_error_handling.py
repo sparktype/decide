@@ -2,8 +2,8 @@
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
 
-import guru.server as server_module
-from guru.server import _decide_tool_body
+import determination.server as server_module
+from determination.server import _decide_tool_body
 
 
 def test_invalid_input_raises_tool_error_not_value_error():

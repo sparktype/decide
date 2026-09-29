@@ -1,19 +1,19 @@
-# .mcp.json 등록과 guru-decide SKILL.md 존재/내용 테스트
+# .mcp.json 등록과 determination-decide SKILL.md 존재/내용 테스트
 import json
 import os
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
 MCP_CONFIG = ROOT / ".mcp.json"
-SKILL_PATH = ROOT / ".claude" / "skills" / "guru-decide" / "SKILL.md"
+SKILL_PATH = ROOT / ".claude" / "skills" / "determination-decide" / "SKILL.md"
 
 
 def test_mcp_json_command_resolves_to_this_repos_venv():
     pyproject_text = (ROOT / "pyproject.toml").read_text()
-    assert 'guru-mcp = "guru.server:main"' in pyproject_text
+    assert 'determination-mcp = "determination.server:main"' in pyproject_text
 
     config = json.loads(MCP_CONFIG.read_text())
-    command = config["mcpServers"]["guru"]["command"]
+    command = config["mcpServers"]["Determination"]["command"]
 
     command_path = Path(command)
     assert command_path.is_absolute(), "상대/PATH 의존 커맨드는 다른 설치를 잘못 가리킬 수 있다"
