@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "decide": {
-      "command": "/Users/spark/Develop/Workspaces/Determination/.venv/bin/decide-mcp",
+      "command": "/Users/spark/Develop/Workspaces/decide-mcp/.venv/bin/decide-mcp",
       "args": []
     },
     "graft": {

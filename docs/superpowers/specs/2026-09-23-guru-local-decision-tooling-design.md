@@ -24,7 +24,7 @@ Mac 환경은 CPU(또는 PyTorch MPS) 추론이므로, "150ms 판단"은 GPU 기
 있게 하는 도구를 만든다.
 
 **이름에 대해**: "Jev"는 TypeSafe AI의 제품명이므로 이 도구에는 사용하지 않는다.
-프로젝트 이름은 `decide`다. 폴더는 `Determination`이다.
+프로젝트 이름은 `decide`다. 폴더는 `decide-mcp`다.
 
 **전송 방식 결정**: 최초 설계는 HTTP 데몬 + CLI였으나, "stdio로 통신하면 어떨지"라는
 요청을 검토한 결과 **MCP(Model Context Protocol) 서버로 전환**하기로 했다. 이유는

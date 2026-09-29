@@ -1,6 +1,6 @@
 # guru MCP 서버(decide tool) + Skill Implementation Plan
 
-2026-09-29에 이 프로젝트의 이름은 decide다. 폴더는 Determination이다. 아래 태스크 기록은 처음 만들 때의 경로를 그대로 둔다.
+2026-09-29에 이 프로젝트의 이름은 decide다. 폴더는 decide-mcp다. 아래 태스크 기록은 처음 만들 때의 경로를 그대로 둔다.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
