@@ -1,0 +1,16 @@
+[package]
+name = "decide"
+version = "0.1.0"
+edition = "2021"
+description = "Choice, score, and noul decisions via TypeSafe Jev or a local model"
+publish = false
+
+[[bin]]
+name = "decide"
+path = "src/main.rs"
+
+[dependencies]
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+ureq = { version = "2.12", default-features = false, features = ["tls", "json"] }
