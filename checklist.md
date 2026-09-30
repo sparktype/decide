@@ -27,7 +27,7 @@
 ## 실행 검증 (Python 삭제 전 게이트)
 
 - [x] `cargo test` 통과 (31건)
-- [ ] 키가 있는 환경에서 TypeSafe 호출이 `routing.backend == "typesafe"`
+- [x] 키가 있는 환경에서 TypeSafe 호출이 `routing.backend == "typesafe"` (사용자가 직접 실행: jev-1.13.0, noul 0.84, 528ms)
 - [x] `jev-style serve` 기동 후 `DECIDE_BACKEND=local` 호출이 `routing.backend == "local"`, 한글 state 정상 (debug 빌드, `decide mcp` stdio로 choice/score 확인)
 - [x] 데몬 소켓에 JSON 한 줄 → 같은 껍데기 응답 (임시 HOME, 로컬 백엔드+실서버: 1차 154ms, 동일 요청 `cached: true`·0ms, 검증 오류 후에도 데몬 유지)
 
