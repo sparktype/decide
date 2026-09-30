@@ -1,4 +1,5 @@
 use decide::backend::{live_transport, Env};
+use decide::claude::{self, Installed};
 use decide::daemon;
 use decide::mcp::handle_message;
 use serde_json::Value;
@@ -26,8 +27,23 @@ fn main() {
             }
         }
         Some("install") => {
-            reject_extra(args.next());
-            if let Err(err) = run_install() {
+            let with_claude = match args.next().as_deref() {
+                None => false,
+                Some("--claude") => {
+                    reject_extra(args.next());
+                    true
+                }
+                Some(other) => {
+                    eprintln!("알 수 없는 옵션입니다: {other}");
+                    std::process::exit(2);
+                }
+            };
+            let result = if with_claude {
+                run_install_claude()
+            } else {
+                run_install()
+            };
+            if let Err(err) = result {
                 eprintln!("{err}");
                 std::process::exit(1);
             }
@@ -66,12 +82,13 @@ fn reject_extra(extra: Option<String>) {
 fn print_help() {
     println!(
         "\
-decide [mcp|daemon|install|hook]
+decide [mcp|daemon|install [--claude]|hook]
 
 인자 없이 실행하면 이 도움말이다.
   mcp      stdio MCP
   daemon   ~/.cache/decide/decide.sock
   install  claude mcp add로 Claude Code 사용자 스코프에 decide를 등록한다
+           --claude  MCP 등록에 더해 표시 훅(PostToolUse)도 Claude Code 사용자 설정에 넣는다
   hook     Claude Code PostToolUse 훅. decide 결과를 사용자에게 한 줄로 보여준다
 
 DECIDE_BACKEND=typesafe|local
@@ -107,6 +124,17 @@ fn run_install() -> io::Result<()> {
         return Ok(());
     }
     Err(io::Error::other("claude mcp add 실행이 실패했습니다"))
+}
+
+fn run_install_claude() -> io::Result<()> {
+    run_install()?;
+    let path = claude::settings_path().map_err(io::Error::other)?;
+    let command = claude::hook_command(DECIDE_BIN);
+    match claude::install_hook(&path, &command).map_err(io::Error::other)? {
+        Installed::Added => println!("훅을 등록했습니다: {}", path.display()),
+        Installed::AlreadyPresent => println!("훅이 이미 등록돼 있습니다: {}", path.display()),
+    }
+    Ok(())
 }
 
 fn run_mcp() -> io::Result<()> {

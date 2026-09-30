@@ -93,6 +93,11 @@ or `.claude/settings.json`, restart Claude Code.
   is a fresh process per call and has no cache.
 - `main.rs` routes `mcp`, `daemon`, `install`, and `hook` subcommands. No arguments prints
   help. `install` shells out to `claude mcp add -s user decide -- <bin> mcp`.
+- `claude.rs` merges the display hook into Claude Code's user settings for `decide install --claude`:
+  `add_hook` (pure) appends one `PostToolUse` group for `mcp__decide__decide`, idempotent on the exact
+  command, refusing shapes it cannot merge into; `install_hook` reads the file (missing = `{}`, invalid
+  JSON = error without writing), backs up to `settings.json.bak-decide`, and replaces it via a temp file
+  keeping permissions. Bare `decide install` stays MCP-only.
 - `show.rs` turns a `PostToolUse` hook input for `mcp__decide__decide` into a user-facing summary
   (`render(&Value) -> Option<String>`, pure). `decide hook` (`main.rs`) reads stdin, prints
   `{"systemMessage": ...}` as one JSON line, and stays silent with exit 0 on anything unreadable.

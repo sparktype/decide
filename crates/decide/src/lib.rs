@@ -1,4 +1,5 @@
 pub mod backend;
+pub mod claude;
 pub mod daemon;
 pub mod local;
 pub mod mcp;

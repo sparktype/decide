@@ -84,3 +84,17 @@
 - **사고: 공유 체크아웃의 브랜치 전환.** 작업 중 다른 세션이 같은 체크아웃의 브랜치를 `docs/readme-banner`로
   바꿔, Task 2 커밋이 그 브랜치에 들어갔다(9c61c8c). 전용 워크트리 `../decide-many`로 옮기고 내 브랜치에서
   관련 없는 README 배너 커밋을 rebase로 뺐다. `docs/readme-banner`의 9c61c8c는 건드리지 않았다.
+
+## 2026-10-01 (decide install --claude)
+
+- **요청.** 표시 훅 등록도 `decide install --claude` 형태로 지원. 작은 변경(bounded)으로 분류해 채팅 설계 승인 뒤 TDD로 구현.
+- **결정.** 그냥 `decide install`은 그대로(MCP만). `--claude`는 MCP 등록 + 훅 등록. `claude` CLI에 훅 추가 명령이
+  없어 사용자 설정(`~/.claude/settings.json`, `CLAUDE_CONFIG_DIR` 우선)을 직접 병합. 멱등(같은 명령이 어느
+  그룹에든 있으면 무변경), 다른 설정은 순서까지 보존, 깨진 JSON·병합 불가 모양은 파일을 쓰지 않고 오류,
+  바꾸기 전 `settings.json.bak-decide` 백업, 임시 파일로 교체하며 권한 유지. MCP 등록이 실패하면 설정은 건드리지 않음.
+- **범위 밖.** 제거 명령, 프로젝트 스코프, `decide_many` 표시. 제거는 README에 수동 방법만 적음.
+- **설계와 달라진 점 하나.** 파일 입출력도 테스트하기 쉽게 `main.rs`가 아니라 `claude.rs`에 둠(`install_hook`).
+- **실데이터 확인.** 사용자의 실제 `settings.json` 복사본(임시 HOME)에 병합해 키 12개 동일, 키 순서 유지,
+  PostToolUse 3→4(원본 순서 유지), 백업이 원본과 바이트 동일, 두 번째 실행 무변경을 확인. 실제 파일은 건드리지 않음.
+- **주의.** 병합 후 JSON이 2칸 들여쓰기로 다시 쓰여 공백 모양이 달라질 수 있음(README에 명시). 실제 Claude Code
+  세션에서 훅이 보이는지는 여전히 미확인. 새 기능이라 릴리스(0.0.6)가 필요.
