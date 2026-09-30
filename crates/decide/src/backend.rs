@@ -1,6 +1,6 @@
 use crate::local;
 use crate::protocol::{parse_arguments, validate, DecideResult};
-use crate::typesafe::{self, Transport};
+use crate::typesafe::{self, LiveTransport, Transport};
 use serde_json::{json, Value};
 
 pub const MISSING_KEY: &str = "TYPESAFE_API_KEY가 없습니다";
@@ -60,25 +60,35 @@ pub fn decide<T: Transport>(
     let incoming = parse_arguments(raw)?;
     let question = validate(&incoming)?;
     let backend = select_backend(env.backend.as_deref(), env.api_key.as_deref())?;
-    if backend == Backend::Local {
-        return Err(local::NOT_READY.to_string());
-    }
-    if let Some(message) = typesafe::limit_error(&question) {
-        return Err(message.to_string());
+    let (name, label) = match backend {
+        Backend::Typesafe => ("typesafe", "TypeSafe"),
+        Backend::Local => ("local", "로컬"),
+    };
+    if backend == Backend::Typesafe {
+        if let Some(message) = typesafe::limit_error(&question) {
+            return Err(message.to_string());
+        }
     }
     let body = typesafe::request_body(&incoming.state, &question);
     let start = millis();
-    let response = typesafe::execute(transport, &body, sleep)?;
+    let response = typesafe::execute(transport, &body, label, sleep)?;
     let latency_ms = millis() - start;
-    let (answer, model) = typesafe::map_response(&response)?;
+    let (answer, model) = typesafe::map_response(&response, label)?;
     Ok(DecideResult {
         answer,
         routing: json!({
-            "backend": "typesafe",
+            "backend": name,
             "model": model,
         }),
         latency_ms,
     })
+}
+
+pub fn live_transport(env: &Env) -> LiveTransport {
+    match select_backend(env.backend.as_deref(), env.api_key.as_deref()) {
+        Ok(Backend::Local) => LiveTransport::local(&local::url()),
+        _ => LiveTransport::typesafe(nonempty(env.api_key.as_deref()).unwrap_or("")),
+    }
 }
 
 pub fn nonempty(value: Option<&str>) -> Option<&str> {
@@ -161,25 +171,38 @@ mod tests {
         assert_eq!(script.calls.get(), 1);
     }
 
-    #[test]
-    fn local_and_over_limit_do_not_call_typesafe() {
-        let mut script = Script {
-            responses: vec![],
+    const NOUL_OK: &str =
+        r#"{"model":"jev-style-2b-decision-v3","answers":{"q":{"type":"noul","noul":0.9}}}"#;
+
+    fn ok_script(body: &str) -> Script {
+        Script {
+            responses: vec![Ok(RawResponse {
+                status: 200,
+                body: body.into(),
+            })],
             calls: Cell::new(0),
-        };
-        let err = decide(
+        }
+    }
+
+    #[test]
+    fn local_routes_the_server_answer_as_local() {
+        let mut script = ok_script(NOUL_OK);
+        let result = decide(
             &noul(),
             &env(Some("local"), Some("k")),
             &mut script,
             || 0.0,
-            || {
-                panic!("로컬은 호출하지 않는다");
-            },
+            || panic!("성공 응답은 재시도하지 않는다"),
         )
-        .unwrap_err();
-        assert_eq!(err, local::NOT_READY);
-        assert_eq!(script.calls.get(), 0);
+        .unwrap();
+        assert_eq!(result.routing["backend"], "local");
+        assert_eq!(result.routing["model"], "jev-style-2b-decision-v3");
+        assert_eq!(result.answer["noul"], 0.9);
+        assert_eq!(script.calls.get(), 1);
+    }
 
+    #[test]
+    fn local_leaves_option_limits_to_the_server_but_typesafe_checks_first() {
         let mut options = Vec::new();
         for i in 0..256 {
             options.push(i.to_string());
@@ -190,16 +213,45 @@ mod tests {
             "instructions": "어느 쪽?",
             "options": options,
         });
+        let mut script = ok_script(
+            r#"{"model":"m","answers":{"q":{"type":"choice","choice":"0","probabilities":{"0":1.0}}}}"#,
+        );
+        decide(&raw, &env(Some("local"), None), &mut script, || 0.0, || {}).unwrap();
+        assert_eq!(script.calls.get(), 1);
+
+        let mut untouched = Script {
+            responses: vec![],
+            calls: Cell::new(0),
+        };
         let err = decide(
             &raw,
             &env(Some("typesafe"), Some("k")),
-            &mut script,
+            &mut untouched,
             || 0.0,
             || {},
         )
         .unwrap_err();
         assert_eq!(err, typesafe::CHOICE_LIMIT);
-        assert_eq!(script.calls.get(), 0);
+        assert_eq!(untouched.calls.get(), 0);
+    }
+
+    #[test]
+    fn local_failure_names_local_and_does_not_fall_back() {
+        let mut script = Script {
+            responses: vec![Err("connection refused".into())],
+            calls: Cell::new(0),
+        };
+        let err = decide(
+            &noul(),
+            &env(Some("local"), Some("k")),
+            &mut script,
+            || 0.0,
+            || panic!("재시도하면 안 된다"),
+        )
+        .unwrap_err();
+        assert!(err.contains("로컬"), "{err}");
+        assert!(!err.contains("TypeSafe"), "{err}");
+        assert_eq!(script.calls.get(), 1);
     }
 
     #[test]

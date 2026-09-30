@@ -14,21 +14,21 @@
 
 ## 구현
 
-- [ ] 실패하는 테스트 먼저: 로컬 선택 시 로컬 주소로 호출, `Authorization` 없음
-- [ ] 실패하는 테스트: 로컬 응답 → `routing.backend == "local"`
-- [ ] 실패하는 테스트: 로컬에서 choice 256개가 한도 오류 없이 호출까지 감
-- [ ] 실패하는 테스트: 로컬 연결 실패는 안내 문구를 내고 다른 백엔드로 안 넘어감
-- [ ] `local.rs`: 기본 주소와 오류 문구
-- [ ] `typesafe.rs`: `LiveTransport`가 주소와 선택적 키를 받고 오류 문구가 백엔드 이름을 받음
-- [ ] `backend.rs`: `Backend::Local`이 같은 경로를 타도록 변경, NOT_READY 제거
-- [ ] `DECIDE_LOCAL_URL` 읽기 (`Env`에 추가)
-- [ ] `cargo test` 전체 통과
+- [x] 실패하는 테스트 먼저: 로컬 선택 시 로컬 주소로 호출, `Authorization` 없음
+- [x] 실패하는 테스트: 로컬 응답 → `routing.backend == "local"`
+- [x] 실패하는 테스트: 로컬에서 choice 256개가 한도 오류 없이 호출까지 감
+- [x] 실패하는 테스트: 로컬 연결 실패는 안내 문구를 내고 다른 백엔드로 안 넘어감
+- [x] `local.rs`: 기본 주소와 오류 문구
+- [x] `typesafe.rs`: `LiveTransport`가 주소와 선택적 키를 받고 오류 문구가 백엔드 이름을 받음
+- [x] `backend.rs`: `Backend::Local`이 같은 경로를 타도록 변경, NOT_READY 제거
+- [x] `DECIDE_LOCAL_URL` 읽기 (`local::url()`로 구현, `Env`는 바꾸지 않음)
+- [x] `cargo test` 전체 통과
 
 ## 실행 검증 (Python 삭제 전 게이트)
 
-- [ ] `cargo test` 통과
+- [x] `cargo test` 통과 (31건)
 - [ ] 키가 있는 환경에서 TypeSafe 호출이 `routing.backend == "typesafe"`
-- [ ] `jev-style serve` 기동 후 `DECIDE_BACKEND=local` 호출이 `routing.backend == "local"`, 한글 state 정상
+- [x] `jev-style serve` 기동 후 `DECIDE_BACKEND=local` 호출이 `routing.backend == "local"`, 한글 state 정상 (debug 빌드, `decide mcp` stdio로 choice/score 확인)
 - [ ] 데몬 소켓에 JSON 한 줄 → 같은 껍데기 응답
 
 ## 정리 (위 게이트 통과 후 같은 변경에서)

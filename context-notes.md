@@ -32,3 +32,14 @@
   해제했다. 환경 변수 확인 출력에 `HF_TOKEN`이 노출돼 사용자에게 알렸다.
 - **scratchpad 잔여물.** `jv/`(venv), `mlx-rs/`(clone), `ko_test.py`. 세션 임시 디렉터리라
   정리 불필요. 2B v3 8bit 가중치(약 2GB)는 HF 캐시에 남아 있다.
+- **구현 (feat/local-jev-style-backend).** `execute`/`map_response`/`http_error`가 라벨("TypeSafe"/
+  "로컬")을 받고, `LiveTransport`는 `typesafe(key)`/`local(url)` 생성자로 주소와 선택적 키를 갖는다.
+  `backend::live_transport(env)`가 프로세스 시작 시 백엔드에 맞는 전송을 고른다. `Env`는 바꾸지
+  않고 `DECIDE_LOCAL_URL`은 `local::url()`이 읽는다(`Env` 리터럴 8곳 수정을 피함).
+  로컬 연결 실패 안내 문구는 전송 계층(`key.is_none()`)에서 붙인다.
+- **실측으로 설계 가정 정정.** `jev-style serve` API는 choice 255개 초과에 422를 돌려준다(모델
+  런타임은 무제한). 클라이언트는 로컬 한도를 검사하지 않고 서버 메시지를 그대로 전달한다. 설계
+  문서 수정. 서버 오류는 `{"error":{"message"}}` 중첩이라 `http_error`가 원문 JSON을 그대로
+  보여 준다(읽을 만해서 그대로 둠).
+- **fmt.** baseline이 `cargo fmt --check` 미준수라 `cargo fmt`가 무관한 코드까지 바꿨다.
+  `tests/cli.rs`와 `daemon.rs`의 서식만 바뀐 hunk는 되돌렸다. 저장소 전체 fmt 정리는 별도 변경으로.

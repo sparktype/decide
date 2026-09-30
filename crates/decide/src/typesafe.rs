@@ -66,6 +66,7 @@ pub fn authorization(key: &str) -> String {
 pub fn execute<T: Transport>(
     transport: &mut T,
     body: &Value,
+    label: &str,
     mut sleep: impl FnMut(),
 ) -> Result<Value, String> {
     let mut attempt = 0;
@@ -73,35 +74,35 @@ pub fn execute<T: Transport>(
         attempt += 1;
         let raw = match transport.post_json(body) {
             Ok(raw) => raw,
-            Err(err) => return Err(format!("TypeSafe 연결에 실패했습니다: {err}")),
+            Err(err) => return Err(format!("{label} 연결에 실패했습니다: {err}")),
         };
         if (raw.status == 429 || raw.status == 529) && attempt == 1 {
             sleep();
             continue;
         }
         if !(200..300).contains(&raw.status) {
-            return Err(http_error(raw.status, &raw.body));
+            return Err(http_error(label, raw.status, &raw.body));
         }
         return serde_json::from_str(&raw.body)
-            .map_err(|_| "TypeSafe 응답이 JSON이 아닙니다".to_string());
+            .map_err(|_| format!("{label} 응답이 JSON이 아닙니다"));
     }
 }
 
-pub fn map_response(body: &Value) -> Result<(Value, String), String> {
+pub fn map_response(body: &Value, label: &str) -> Result<(Value, String), String> {
     let model = body
         .get("model")
         .and_then(Value::as_str)
-        .ok_or_else(|| "TypeSafe 응답에 model이 없습니다".to_string())?
+        .ok_or_else(|| format!("{label} 응답에 model이 없습니다"))?
         .to_string();
     let answer = body
         .get("answers")
         .and_then(|answers| answers.get("q"))
         .cloned()
-        .ok_or_else(|| "TypeSafe 응답에 answers.q가 없습니다".to_string())?;
+        .ok_or_else(|| format!("{label} 응답에 answers.q가 없습니다"))?;
     Ok((answer, model))
 }
 
-fn http_error(status: u16, body: &str) -> String {
+fn http_error(label: &str, status: u16, body: &str) -> String {
     let detail = serde_json::from_str::<Value>(body)
         .ok()
         .and_then(|value| {
@@ -113,47 +114,59 @@ fn http_error(status: u16, body: &str) -> String {
         })
         .unwrap_or_else(|| body.trim().to_string());
     if detail.is_empty() {
-        format!("TypeSafe 요청이 실패했습니다: HTTP {status}")
+        format!("{label} 요청이 실패했습니다: HTTP {status}")
     } else {
-        format!("TypeSafe 요청이 실패했습니다: HTTP {status}: {detail}")
+        format!("{label} 요청이 실패했습니다: HTTP {status}: {detail}")
     }
 }
 
 pub struct LiveTransport {
     agent: ureq::Agent,
-    key: String,
+    url: String,
+    key: Option<String>,
 }
 
 impl LiveTransport {
-    pub fn new(key: &str) -> Self {
+    pub fn typesafe(key: &str) -> Self {
+        Self::build(ENDPOINT, Some(key.to_string()))
+    }
+
+    pub fn local(url: &str) -> Self {
+        Self::build(url, None)
+    }
+
+    fn build(url: &str, key: Option<String>) -> Self {
         Self {
             agent: ureq::AgentBuilder::new()
                 .timeout(std::time::Duration::from_secs(30))
                 .build(),
-            key: key.to_string(),
+            url: url.to_string(),
+            key,
         }
     }
 }
 
 impl Transport for LiveTransport {
     fn post_json(&mut self, body: &Value) -> Result<RawResponse, String> {
-        match self
+        let mut request = self
             .agent
-            .post(ENDPOINT)
-            .set("Authorization", &authorization(&self.key))
-            .set("Content-Type", "application/json")
-            .send_json(body)
-        {
+            .post(&self.url)
+            .set("Content-Type", "application/json");
+        if let Some(key) = &self.key {
+            request = request.set("Authorization", &authorization(key));
+        }
+        match request.send_json(body) {
             Ok(response) => Ok(RawResponse {
                 status: response.status(),
                 body: response
                     .into_string()
-                    .map_err(|err| format!("TypeSafe 응답을 읽지 못했습니다: {err}"))?,
+                    .map_err(|err| format!("응답을 읽지 못했습니다: {err}"))?,
             }),
             Err(ureq::Error::Status(status, response)) => Ok(RawResponse {
                 status,
                 body: response.into_string().unwrap_or_default(),
             }),
+            Err(err) if self.key.is_none() => Err(format!("{err}. {}", crate::local::CONNECT_HINT)),
             Err(err) => Err(err.to_string()),
         }
     }
@@ -297,7 +310,7 @@ mod tests {
             calls: Cell::new(0),
         };
         let slept = Cell::new(0);
-        let parsed = execute(&mut script, &request_body("s", &noul()), || {
+        let parsed = execute(&mut script, &request_body("s", &noul()), "TypeSafe", || {
             slept.set(slept.get() + 1);
         })
         .unwrap();
@@ -321,7 +334,13 @@ mod tests {
             ],
             calls: Cell::new(0),
         };
-        let err = execute(&mut overloaded, &request_body("s", &noul()), || {}).unwrap_err();
+        let err = execute(
+            &mut overloaded,
+            &request_body("s", &noul()),
+            "TypeSafe",
+            || {},
+        )
+        .unwrap_err();
         assert!(err.contains("529"), "{err}");
         assert!(err.contains("busy"), "{err}");
         assert_eq!(overloaded.calls.get(), 2);
@@ -330,7 +349,7 @@ mod tests {
             responses: vec![Err("connection reset".into())],
             calls: Cell::new(0),
         };
-        let err = execute(&mut down, &request_body("s", &noul()), || {
+        let err = execute(&mut down, &request_body("s", &noul()), "TypeSafe", || {
             panic!("재시도하면 안 된다")
         })
         .unwrap_err();
@@ -344,12 +363,80 @@ mod tests {
             })],
             calls: Cell::new(0),
         };
-        let err = execute(&mut invalid, &request_body("s", &noul()), || {
-            panic!("재시도하면 안 된다")
-        })
+        let err = execute(
+            &mut invalid,
+            &request_body("s", &noul()),
+            "TypeSafe",
+            || panic!("재시도하면 안 된다"),
+        )
         .unwrap_err();
         assert!(err.contains("422"), "{err}");
         assert_eq!(invalid.calls.get(), 1);
+    }
+
+    fn serve_once(reply: &'static str) -> (String, std::thread::JoinHandle<String>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/v1/systemone", listener.local_addr().unwrap());
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0u8; 4096];
+            loop {
+                let n = stream.read(&mut chunk).unwrap();
+                request.extend_from_slice(&chunk[..n]);
+                let text = String::from_utf8_lossy(&request).to_string();
+                if let Some(end) = text.find("\r\n\r\n") {
+                    let length = text
+                        .lines()
+                        .find_map(|l| {
+                            l.to_lowercase()
+                                .strip_prefix("content-length:")
+                                .map(|v| v.trim().parse::<usize>().unwrap())
+                        })
+                        .unwrap_or(0);
+                    if request.len() >= end + 4 + length {
+                        break;
+                    }
+                }
+                assert!(n > 0, "요청이 끝나기 전에 연결이 닫혔다");
+            }
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                reply.len(),
+                reply
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+            String::from_utf8_lossy(&request).to_string()
+        });
+        (url, handle)
+    }
+
+    #[test]
+    fn local_transport_posts_to_its_url_without_authorization() {
+        let (url, server) =
+            serve_once(r#"{"model":"m","answers":{"q":{"type":"noul","noul":0.5}}}"#);
+        let mut transport = LiveTransport::local(&url);
+        let raw = transport.post_json(&request_body("s", &noul())).unwrap();
+        assert_eq!(raw.status, 200);
+        let request = server.join().unwrap();
+        assert!(request.starts_with("POST /v1/systemone "), "{request}");
+        assert!(
+            !request.to_lowercase().contains("authorization"),
+            "{request}"
+        );
+    }
+
+    #[test]
+    fn local_connection_failure_points_at_jev_style_serve() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/v1/systemone", listener.local_addr().unwrap());
+        drop(listener);
+        let err = LiveTransport::local(&url)
+            .post_json(&request_body("s", &noul()))
+            .err()
+            .unwrap();
+        assert!(err.contains("jev-style serve"), "{err}");
     }
 
     #[test]
@@ -359,13 +446,13 @@ mod tests {
             "answers": {"q": {"type": "noul", "noul": 0.95}},
             "usage": {"input_tokens": 1, "output_tokens": 1}
         });
-        let (answer, model) = map_response(&body).unwrap();
+        let (answer, model) = map_response(&body, "TypeSafe").unwrap();
         assert_eq!(model, "jev-1.13.0");
         assert_eq!(answer, json!({"type": "noul", "noul": 0.95}));
         assert!(answer.get("confidence").is_none());
         assert!(answer.get("action").is_none());
         assert_eq!(
-            map_response(&json!({"model": "jev-1.13.0"})).unwrap_err(),
+            map_response(&json!({"model": "jev-1.13.0"}), "TypeSafe").unwrap_err(),
             "TypeSafe 응답에 answers.q가 없습니다"
         );
     }

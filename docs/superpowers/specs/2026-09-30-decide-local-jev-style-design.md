@@ -36,10 +36,10 @@ Python 없음"은 로컬 백엔드에 한해 포기한다. TypeSafe 백엔드는
 | 주소 | `DECIDE_LOCAL_URL`, 기본 `http://127.0.0.1:8765/v1/systemone`. |
 | 인증 | 보내지 않는다. 서버는 `auth=off`이고 127.0.0.1에만 바인딩한다. |
 | 요청 본문 | `typesafe::request_body`를 그대로 쓴다. |
-| 한도 | TypeSafe의 choice 255, score 10 한도는 로컬에 적용하지 않는다. 서버는 25,600토큰 안에서 옵션 개수를 제한하지 않는다. 입력 초과는 서버 오류로 돌려받는다. |
+| 한도 | 클라이언트는 로컬에서 옵션·등급 개수를 검사하지 않는다. 모델 런타임은 25,600토큰 안에서 개수 제한이 없지만, `jev-style serve` API는 choice가 255개를 넘으면 422(`choice needs 1..255 options`)로 거절한다(2026-09-30 실측). 그 메시지가 그대로 전달된다. score 등급 상한은 확인하지 못했다. |
 | 재시도 | `typesafe::execute`를 공유한다. 429와 529 한 번 재시도는 로컬에서도 그대로 돈다. |
 | 응답 | `answer`는 서버의 `answers.q`다. `routing`은 `{"backend": "local", "model": <서버 model>}`이다. |
-| 오류 | 연결 실패는 "로컬 서버에 연결하지 못했습니다"로 시작하고 `jev-style serve` 실행을 안내한다. 다른 백엔드로 넘어가지 않는다. |
+| 오류 | 연결 실패는 "로컬 연결에 실패했습니다: …. jev-style serve가 실행 중인지 확인하세요"다. 다른 백엔드로 넘어가지 않는다. |
 | 캐시 | 데몬 LRU는 요청과 해석된 백엔드가 키라 그대로 동작한다. |
 
 Laya `system_one`의 `action` 키는 더 이상 나오지 않는다. 로컬 답은 TypeSafe 답과 같은
@@ -60,7 +60,7 @@ Laya `system_one`의 `action` 키는 더 이상 나오지 않는다. 로컬 답�
 
 - 로컬 선택 시 요청이 로컬 주소로 가고 `Authorization`이 없다(스크립트 transport로 검사).
 - 로컬 응답이 `routing.backend == "local"`로 매핑된다. 기록한 응답 JSON을 쓴다.
-- 로컬에는 255/10 한도 오류가 없다. 256개 choice가 호출까지 간다.
+- 로컬에서는 클라이언트가 한도를 검사하지 않아 256개 choice가 호출까지 간다. TypeSafe는 호출 전에 막는다.
 - 로컬 연결 실패가 TypeSafe로 넘어가지 않고 안내 문구를 낸다.
 - 기존 `typesafe_error_does_not_call_local` 계열은 유지한다.
 

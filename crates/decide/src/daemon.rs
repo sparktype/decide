@@ -1,6 +1,6 @@
-use crate::backend::{decide, nonempty, select_backend, Backend, Env};
+use crate::backend::{decide, live_transport, select_backend, Backend, Env};
 use crate::protocol::{parse_arguments, DecideResult, Incoming};
-use crate::typesafe::{LiveTransport, Transport};
+use crate::typesafe::Transport;
 use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Write};
@@ -130,8 +130,7 @@ pub fn serve(path: &Path, idle: Duration) -> std::io::Result<()> {
     let _guard = SocketGuard(path.to_path_buf());
     listener.set_nonblocking(true)?;
     let env = Env::from_process();
-    let key = nonempty(env.api_key.as_deref()).unwrap_or("");
-    let mut transport = LiveTransport::new(key);
+    let mut transport = live_transport(&env);
     let mut cache = Cache::default();
     loop {
         match accept_within(&listener, idle)? {
@@ -217,7 +216,6 @@ fn accept_within(listener: &UnixListener, idle: Duration) -> std::io::Result<Opt
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::local;
     use crate::typesafe::{RawResponse, Transport};
     use std::cell::Cell;
 
@@ -261,17 +259,17 @@ mod tests {
             backend: Some("local".into()),
             api_key: None,
         };
-        let err_line = handle_line(
+        let local_line = handle_line(
             r#"{"state":"s","type":"noul","instructions":"참인가?"}"#,
             &env,
             &mut script,
             &mut cache,
         )
         .unwrap();
-        let parsed: Value = serde_json::from_str(&err_line).unwrap();
-        assert_eq!(parsed["error"], local::NOT_READY);
+        let parsed: Value = serde_json::from_str(&local_line).unwrap();
+        assert_eq!(parsed["routing"]["backend"], "local");
         assert!(handle_line("\n", &env, &mut script, &mut cache).is_none());
-        assert_eq!(script.calls.get(), 1);
+        assert_eq!(script.calls.get(), 2);
     }
 
     #[test]

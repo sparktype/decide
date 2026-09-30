@@ -22,6 +22,7 @@ fn daemon_returns_one_line_and_stays_up_after_an_error() {
         .arg("daemon")
         .env("HOME", &home)
         .env("DECIDE_BACKEND", "local")
+        .env("DECIDE_LOCAL_URL", "http://127.0.0.1:1/v1/systemone")
         .env_remove("TYPESAFE_API_KEY")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -55,12 +56,12 @@ fn daemon_returns_one_line_and_stays_up_after_an_error() {
     };
 
     let first = roundtrip(stream);
-    assert_eq!(first["error"], "로컬 백엔드가 아직 준비되지 않았습니다");
+    assert!(first["error"].as_str().unwrap().contains("jev-style serve"));
     assert!(child.try_wait().unwrap().is_none());
 
     let second = UnixStream::connect(&sock).expect("오류 뒤에도 소켓이 살아 있어야 한다");
     let again = roundtrip(second);
-    assert_eq!(again["error"], "로컬 백엔드가 아직 준비되지 않았습니다");
+    assert!(again["error"].as_str().unwrap().contains("jev-style serve"));
 
     let _ = child.kill();
     let _ = child.wait();
