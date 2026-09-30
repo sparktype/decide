@@ -43,3 +43,6 @@
   보여 준다(읽을 만해서 그대로 둠).
 - **fmt.** baseline이 `cargo fmt --check` 미준수라 `cargo fmt`가 무관한 코드까지 바꿨다.
   `tests/cli.rs`와 `daemon.rs`의 서식만 바뀐 hunk는 되돌렸다. 저장소 전체 fmt 정리는 별도 변경으로.
+- **실행 검증 진행.** 데몬 소켓(임시 HOME, `DECIDE_BACKEND=local`, 실서버)에서 choice 답, 동일
+  요청 캐시 적중, noul, 검증 오류 뒤 생존을 확인. 남은 게이트는 TypeSafe 실호출 하나
+  (`TYPESAFE_API_KEY` 필요).
