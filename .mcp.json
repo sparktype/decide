@@ -2,7 +2,7 @@
   "mcpServers": {
     "decide": {
       "command": "/opt/homebrew/bin/decide",
-      "args": []
+      "args": ["mcp"]
     },
     "graft": {
       "command": "graft",

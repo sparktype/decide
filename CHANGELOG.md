@@ -1,0 +1,39 @@
+# Changelog
+
+이 파일은 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/) 형식을 따른다.
+
+## [0.0.2] - 2026-09-30
+
+### 변경
+
+- Homebrew formula가 소스를 `cargo install`로 빌드하던 방식을 버리고, GitHub Release에
+  올라간 사전 빌드 arm64 바이너리를 다운로드해 그대로 설치하는 방식으로 바꿨다. 설치 시
+  Rust 툴체인이 필요 없다.
+- `v*` 태그를 push하면 GitHub Actions(`.github/workflows/release.yml`)가
+  `cargo test` → `cargo build --release` → tarball과 체크섬 생성 → GitHub Release 첨부까지
+  자동으로 수행한다.
+- `decide`를 인자 없이 실행하면 stdio MCP 서버를 시작하던 동작을 도움말 출력으로 바꿨다.
+  MCP 서버는 이제 `decide mcp`로만 시작한다. `.mcp.json`의 `decide` 항목도
+  `"args": ["mcp"]`로 맞춰 고쳤다.
+
+### 추가
+
+- `decide install` 서브커맨드. `claude mcp add -s user decide -- /opt/homebrew/bin/decide mcp`를
+  대신 실행해 Claude Code 사용자 스코프에 `decide`를 등록한다. 이미 등록돼 있으면(`claude mcp
+  add`가 "already exists"로 실패해도) 성공으로 취급해 재실행이 안전하다. `claude` CLI가 없거나
+  그 외 이유로 등록이 실패하면 한국어 오류를 내고 비영 종료 코드로 끝난다.
+
+## [0.0.1] - 2026-09-29
+
+### 추가
+
+- 판단 로직을 Python(`src/decide/`, Laya 기반)에서 Rust 크레이트 `crates/decide`로 옮겼다.
+  실행 파일 하나가 `DECIDE_BACKEND`로 TypeSafe Jev와 로컬 백엔드 중 하나를 고른다.
+- `decide`(또는 `decide mcp`)는 stdio MCP 서버, `decide daemon`은
+  `~/.cache/decide/decide.sock`에서 JSON 한 줄을 받는 유휴 30분 데몬이다.
+- `.claude/hooks/stop_verify.py`가 이 데몬을 호출해 세션의 코드 변경이 테스트로 검증됐는지
+  확인하도록 연결했다.
+- Homebrew formula(`packaging/homebrew/decide.rb`)로 소스를 받아 `cargo install`로 빌드해
+  `/opt/homebrew/bin/decide`에 설치하는 최초 배포 경로를 만들었다.
+- 로컬 백엔드는 게시 필드 비교(Laya 0.3.6 대비 `round(x, 4)` 일치)가 끝나기 전까지
+  `로컬 백엔드가 아직 준비되지 않았습니다` 오류를 반환한다.

@@ -1,0 +1,31 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build-release:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test
+        run: cargo test --manifest-path crates/decide/Cargo.toml
+
+      - name: Build release binary
+        run: cargo build --release --manifest-path crates/decide/Cargo.toml
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          tar -czf "dist/decide-${{ github.ref_name }}-aarch64-apple-darwin.tar.gz" \
+            -C crates/decide/target/release decide
+          shasum -a 256 dist/*.tar.gz > dist/checksums.txt
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/checksums.txt

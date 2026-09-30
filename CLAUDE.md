@@ -27,10 +27,14 @@ brew install sparktype/tap/decide
 ```
 
 The published formula is `Formula/decide.rb` in `sparktype/homebrew-tap`. This repo's
-`packaging/homebrew/decide.rb` records the same build. Version is 0.0.1. The formula
-builds `crates/decide` and installs the executable only. The API key stays
-in the environment as `TYPESAFE_API_KEY`. `.mcp.json` points `decide` at
-`/opt/homebrew/bin/decide` with empty `args` and no `env` entry.
+`packaging/homebrew/decide.rb` records the same install. Version is 0.0.2. GitHub
+Actions builds `crates/decide` and uploads a release asset when a `v*` tag is pushed;
+the formula downloads that prebuilt arm64 binary and installs it, no Rust toolchain
+required at install time. The API key stays in the environment as `TYPESAFE_API_KEY`.
+`.mcp.json` points `decide` at `/opt/homebrew/bin/decide` with `args: ["mcp"]` and no
+`env` entry. Running `decide install` registers the tool in Claude Code's user scope
+by shelling out to `claude mcp add -s user decide -- /opt/homebrew/bin/decide mcp`,
+as an alternative to editing `.mcp.json` by hand.
 
 Runtime tests, no weights and no network:
 
@@ -58,8 +62,9 @@ Daemon socket `~/.cache/decide/decide.sock`, 30 minutes idle:
 /opt/homebrew/bin/decide daemon
 ```
 
-`decide` and `decide mcp` are the stdio MCP server. `--help` exits 0 and does not
-start it. After editing `.mcp.json` or `.claude/settings.json`, restart Claude Code.
+`decide mcp` is the stdio MCP server. Running `decide` with no arguments or `--help`
+prints the help text and exits without starting anything. After editing `.mcp.json`
+or `.claude/settings.json`, restart Claude Code.
 
 ## Architecture
 
@@ -79,6 +84,8 @@ start it. After editing `.mcp.json` or `.claude/settings.json`, restart Claude C
 - `mcp.rs` speaks newline-delimited JSON-RPC. Tool failures are `isError` results.
 - `daemon.rs` serves one JSON line per connection. A live socket is left in place. A
   dead socket file is replaced. Idle exit uses `poll`.
+- `main.rs` routes `mcp`, `daemon`, and `install` subcommands. No arguments prints
+  help. `install` shells out to `claude mcp add -s user decide -- <bin> mcp`.
 
 `.claude/hooks/stop_verify.py` remains a stdlib client. It spawns
 `/opt/homebrew/bin/decide daemon` with the hook environment and fail-opens when the

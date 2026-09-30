@@ -4,12 +4,15 @@ use decide::mcp::handle_message;
 use decide::typesafe::LiveTransport;
 use serde_json::Value;
 use std::io::{self, BufRead, Write};
+use std::process::Command;
+
+const DECIDE_BIN: &str = "/opt/homebrew/bin/decide";
 
 fn main() {
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
-        Some("-h") | Some("--help") => print_help(),
-        Some("mcp") | None => {
+        Some("-h") | Some("--help") | None => print_help(),
+        Some("mcp") => {
             reject_extra(args.next());
             if let Err(err) = run_mcp() {
                 eprintln!("{err}");
@@ -19,6 +22,13 @@ fn main() {
         Some("daemon") => {
             reject_extra(args.next());
             if let Err(err) = daemon::serve_default() {
+                eprintln!("{err}");
+                std::process::exit(1);
+            }
+        }
+        Some("install") => {
+            reject_extra(args.next());
+            if let Err(err) = run_install() {
                 eprintln!("{err}");
                 std::process::exit(1);
             }
@@ -40,15 +50,46 @@ fn reject_extra(extra: Option<String>) {
 fn print_help() {
     println!(
         "\
-decide [mcp|daemon]
+decide [mcp|daemon|install]
 
-인자 없이 실행하면 stdio MCP 서버다.
+인자 없이 실행하면 이 도움말이다.
   mcp      stdio MCP
   daemon   ~/.cache/decide/decide.sock
+  install  claude mcp add로 Claude Code 사용자 스코프에 decide를 등록한다
 
 DECIDE_BACKEND=typesafe|local
 TYPESAFE_API_KEY가 있고 백엔드를 지정하지 않으면 TypeSafe Jev를 호출한다."
     );
+}
+
+fn run_install() -> io::Result<()> {
+    let output = Command::new("claude")
+        .args([
+            "mcp", "add", "-s", "user", "decide", "--", DECIDE_BIN, "mcp",
+        ])
+        .output()
+        .map_err(|err| {
+            if err.kind() == io::ErrorKind::NotFound {
+                io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "claude 명령을 찾을 수 없습니다. Claude Code CLI가 설치돼 있는지 확인하세요",
+                )
+            } else {
+                err
+            }
+        })?;
+    io::stdout().write_all(&output.stdout)?;
+    io::stderr().write_all(&output.stderr)?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let already_registered = [&output.stdout[..], &output.stderr[..]]
+        .iter()
+        .any(|bytes| String::from_utf8_lossy(bytes).contains("already exists"));
+    if already_registered {
+        return Ok(());
+    }
+    Err(io::Error::other("claude mcp add 실행이 실패했습니다"))
 }
 
 fn run_mcp() -> io::Result<()> {

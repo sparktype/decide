@@ -24,16 +24,20 @@ Apple Silicon Mac에서는 탭으로 깐다.
 brew install sparktype/tap/decide
 ```
 
-버전은 0.0.1이다. 바이너리는 `/opt/homebrew/bin/decide`다. formula가 설치하는 것은 그 실행 파일이다. 가중치와 API 키는 병 밖에 둔다.
+버전은 0.0.2다. 바이너리는 `/opt/homebrew/bin/decide`다. formula는 GitHub Release에 올라간 사전 빌드 arm64 바이너리를 받아 그대로 설치한다 — 설치에 Rust 툴체인이 필요 없다. 가중치와 API 키는 병 밖에 둔다.
 
-`.mcp.json`의 `decide` 명령은 그 절대 경로다. `args`는 비운다. 키와 `DECIDE_BACKEND`는 이 파일에 적지 않는다. 프로세스 환경에 키가 있으면 TypeSafe를 쓰고, 없으면 로컬을 쓴다.
+```bash
+decide install
+```
+
+`brew install` 뒤에 위 명령을 실행하면 `claude mcp add -s user decide -- /opt/homebrew/bin/decide mcp`를 대신 실행해 Claude Code 사용자 스코프에 `decide`를 등록한다. `.mcp.json`을 손으로 고칠 필요는 없다. 이 저장소처럼 프로젝트 스코프로 등록하고 싶으면 `.mcp.json`을 직접 쓴다.
 
 ```json
 {
   "mcpServers": {
     "decide": {
       "command": "/opt/homebrew/bin/decide",
-      "args": []
+      "args": ["mcp"]
     }
   }
 }
@@ -41,7 +45,7 @@ brew install sparktype/tap/decide
 
 `.mcp.json`을 고친 뒤에는 세션을 다시 연다. 이미 떠 있는 세션은 등록을 다시 읽지 않는다.
 
-`decide`와 `decide mcp`는 stdio MCP다. `decide daemon`은 `~/.cache/decide/decide.sock`에서 JSON 한 줄을 받고, 30분 동안 요청이 없으면 끝난다. `--help`는 서버를 띄우지 않는다.
+`decide mcp`가 stdio MCP다. 인자 없이 실행하면 도움말이다. `decide daemon`은 `~/.cache/decide/decide.sock`에서 JSON 한 줄을 받고, 30분 동안 요청이 없으면 끝난다. `--help`는 서버를 띄우지 않는다.
 
 이 폴더를 열면 `.claude/skills/decide/SKILL.md`도 같이 읽힌다. 도구를 언제 부르고 언제 직접 추론할지는 그 스킬이 안내한다.
 
