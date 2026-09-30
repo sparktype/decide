@@ -43,6 +43,23 @@ pub struct DecideResult {
     pub latency_ms: f64,
 }
 
+pub const QUESTIONS_EMPTY: &str = "questions는 비어 있을 수 없습니다";
+pub const QUESTIONS_NOT_OBJECT: &str = "questions는 객체여야 합니다";
+pub const QUESTION_ID_EMPTY: &str = "질문 id는 비어 있을 수 없습니다";
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct IncomingMany {
+    pub state: String,
+    pub questions: Vec<(String, Incoming)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct DecideManyResult {
+    pub answers: Value,
+    pub routing: Value,
+    pub latency_ms: f64,
+}
+
 pub fn parse_arguments(value: &Value) -> Result<Incoming, String> {
     let obj = value
         .as_object()
@@ -102,6 +119,51 @@ pub fn validate(req: &Incoming) -> Result<Question, String> {
             })
         }
     }
+}
+
+pub fn parse_many(value: &Value) -> Result<IncomingMany, String> {
+    let obj = value
+        .as_object()
+        .ok_or_else(|| "요청은 JSON 객체여야 합니다".to_string())?;
+    let state = match obj.get("state") {
+        Some(Value::String(s)) => s.clone(),
+        Some(_) => return Err("state는 문자열이어야 합니다".to_string()),
+        None => return Err("state가 필요합니다".to_string()),
+    };
+    let map = match obj.get("questions") {
+        Some(Value::Object(map)) => map,
+        Some(_) => return Err(QUESTIONS_NOT_OBJECT.to_string()),
+        None => return Err("questions가 필요합니다".to_string()),
+    };
+    if map.is_empty() {
+        return Err(QUESTIONS_EMPTY.to_string());
+    }
+    let mut questions = Vec::with_capacity(map.len());
+    for (id, question) in map {
+        if id.is_empty() {
+            return Err(QUESTION_ID_EMPTY.to_string());
+        }
+        let mut args = match question {
+            Value::Object(args) => args.clone(),
+            _ => return Err(format!("질문 \"{id}\": 질문은 객체여야 합니다")),
+        };
+        args.insert("state".to_string(), Value::String(state.clone()));
+        let incoming = parse_arguments(&Value::Object(args))
+            .map_err(|err| format!("질문 \"{id}\": {err}"))?;
+        questions.push((id.clone(), incoming));
+    }
+    Ok(IncomingMany { state, questions })
+}
+
+pub fn validate_many(req: &IncomingMany) -> Result<Vec<(String, Question)>, String> {
+    req.questions
+        .iter()
+        .map(|(id, incoming)| {
+            validate(incoming)
+                .map(|question| (id.clone(), question))
+                .map_err(|err| format!("질문 \"{id}\": {err}"))
+        })
+        .collect()
 }
 
 fn parse_kind(raw: &str) -> Result<Kind, String> {
@@ -172,6 +234,108 @@ mod tests {
             Question::Choice { options, .. } => assert_eq!(options, vec!["a", "a", "b"]),
             other => panic!("choice가 아님: {other:?}"),
         }
+    }
+
+    fn many(value: Value) -> Result<IncomingMany, String> {
+        parse_many(&value)
+    }
+
+    #[test]
+    fn many_parses_questions_in_input_order_with_the_shared_state() {
+        let parsed = many(json!({
+            "state": "서버 다운",
+            "questions": {
+                "urgent": {"type": "noul", "instructions": "긴급한가?"},
+                "team": {"type": "choice", "instructions": "어느 팀?", "options": ["billing", "infra"]},
+                "anger": {"type": "score", "instructions": "불만?", "criteria": ["낮음", "높음"]}
+            }
+        }))
+        .unwrap();
+        assert_eq!(parsed.state, "서버 다운");
+        let ids: Vec<&str> = parsed.questions.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(ids, vec!["urgent", "team", "anger"]);
+        assert!(parsed.questions.iter().all(|(_, q)| q.state == "서버 다운"));
+        assert_eq!(parsed.questions[1].1.kind, Kind::Choice);
+        assert_eq!(parsed.questions[1].1.options, vec!["billing", "infra"]);
+    }
+
+    #[test]
+    fn many_rejects_bad_shapes() {
+        assert_eq!(
+            many(json!({"state": "s", "questions": []})).unwrap_err(),
+            QUESTIONS_NOT_OBJECT
+        );
+        assert_eq!(
+            many(json!({"state": "s", "questions": null})).unwrap_err(),
+            QUESTIONS_NOT_OBJECT
+        );
+        assert_eq!(
+            many(json!({"state": "s", "questions": {}})).unwrap_err(),
+            QUESTIONS_EMPTY
+        );
+        assert_eq!(
+            many(json!({"state": "s"})).unwrap_err(),
+            "questions가 필요합니다"
+        );
+        assert_eq!(
+            many(json!({"questions": {"a": {"type": "noul", "instructions": "?"}}})).unwrap_err(),
+            "state가 필요합니다"
+        );
+        assert_eq!(
+            many(json!({"state": 1, "questions": {"a": {"type": "noul", "instructions": "?"}}}))
+                .unwrap_err(),
+            "state는 문자열이어야 합니다"
+        );
+        assert_eq!(
+            many(json!({"state": "s", "questions": {"": {"type": "noul", "instructions": "?"}}}))
+                .unwrap_err(),
+            QUESTION_ID_EMPTY
+        );
+        assert_eq!(
+            many(json!({"state": "s", "questions": {"a": "noul"}})).unwrap_err(),
+            "질문 \"a\": 질문은 객체여야 합니다"
+        );
+        assert_eq!(
+            many(json!({"state": "s", "questions": {"a": {"type": "noul"}}})).unwrap_err(),
+            "질문 \"a\": instructions가 필요합니다"
+        );
+    }
+
+    #[test]
+    fn many_validation_reuses_the_single_question_messages_with_the_id() {
+        let bad_choice = many(json!({
+            "state": "s",
+            "questions": {
+                "ok": {"type": "noul", "instructions": "?"},
+                "team": {"type": "choice", "instructions": "?", "options": ["a"]}
+            }
+        }))
+        .unwrap();
+        assert_eq!(
+            validate_many(&bad_choice).unwrap_err(),
+            format!("질문 \"team\": {CHOICE_TOO_FEW}")
+        );
+        let bad_noul = many(json!({
+            "state": "s",
+            "questions": {"u": {"type": "noul", "instructions": "?", "options": ["a"]}}
+        }))
+        .unwrap();
+        assert_eq!(
+            validate_many(&bad_noul).unwrap_err(),
+            format!("질문 \"u\": {NOUL_EXTRA}")
+        );
+        let good = many(json!({
+            "state": "s",
+            "questions": {
+                "a": {"type": "noul", "instructions": "?"},
+                "b": {"type": "score", "instructions": "?", "criteria": ["x", "y"]}
+            }
+        }))
+        .unwrap();
+        let questions = validate_many(&good).unwrap();
+        assert_eq!(questions.len(), 2);
+        assert_eq!(questions[0].0, "a");
+        assert!(matches!(questions[1].1, Question::Score { .. }));
     }
 
     #[test]

@@ -1,5 +1,5 @@
-use crate::backend::{decide, live_transport, select_backend, Backend, Env};
-use crate::protocol::{parse_arguments, DecideResult, Incoming};
+use crate::backend::{decide, decide_many, live_transport, select_backend, Backend, Env};
+use crate::protocol::{parse_arguments, parse_many, Incoming, IncomingMany};
 use crate::typesafe::Transport;
 use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
@@ -11,24 +11,32 @@ use std::time::{Duration, Instant};
 
 const MAX_CACHE_ENTRIES: usize = 64;
 
+pub const TYPE_WITH_QUESTIONS: &str = "type과 questions는 함께 쓸 수 없습니다";
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct CacheKey {
-    backend: Backend,
-    incoming: Incoming,
+enum CacheKey {
+    One {
+        backend: Backend,
+        incoming: Incoming,
+    },
+    Many {
+        backend: Backend,
+        incoming: IncomingMany,
+    },
 }
 
 #[derive(Default)]
 pub struct Cache {
-    entries: HashMap<CacheKey, DecideResult>,
+    entries: HashMap<CacheKey, Value>,
     order: VecDeque<CacheKey>,
 }
 
 impl Cache {
-    fn get(&self, key: &CacheKey) -> Option<&DecideResult> {
+    fn get(&self, key: &CacheKey) -> Option<&Value> {
         self.entries.get(key)
     }
 
-    fn insert(&mut self, key: CacheKey, value: DecideResult) {
+    fn insert(&mut self, key: CacheKey, value: Value) {
         if !self.entries.contains_key(&key) {
             self.order.push_back(key.clone());
             if self.order.len() > MAX_CACHE_ENTRIES {
@@ -88,28 +96,40 @@ fn call<T: Transport>(
     env: &Env,
     transport: &mut T,
     cache: &mut Cache,
-) -> Result<DecideResult, String> {
-    let cache_key = parse_arguments(raw).ok().and_then(|incoming| {
-        select_backend(env.backend.as_deref(), env.api_key.as_deref())
-            .ok()
-            .map(|backend| CacheKey { backend, incoming })
+) -> Result<Value, String> {
+    let many = raw.get("questions").is_some();
+    if many && raw.get("type").is_some() {
+        return Err(TYPE_WITH_QUESTIONS.to_string());
+    }
+    let backend = select_backend(env.backend.as_deref(), env.api_key.as_deref()).ok();
+    let cache_key = backend.and_then(|backend| {
+        if many {
+            parse_many(raw)
+                .ok()
+                .map(|incoming| CacheKey::Many { backend, incoming })
+        } else {
+            parse_arguments(raw)
+                .ok()
+                .map(|incoming| CacheKey::One { backend, incoming })
+        }
     });
     if let Some(key) = &cache_key {
         if let Some(cached) = cache.get(key) {
             let mut result = cached.clone();
-            result.routing["cached"] = json!(true);
-            result.latency_ms = 0.0;
+            result["routing"]["cached"] = json!(true);
+            result["latency_ms"] = json!(0.0);
             return Ok(result);
         }
     }
     let origin = Instant::now();
-    let result = decide(
-        raw,
-        env,
-        transport,
-        || origin.elapsed().as_secs_f64() * 1000.0,
-        || std::thread::sleep(Duration::from_secs(1)),
-    )?;
+    let clock = || origin.elapsed().as_secs_f64() * 1000.0;
+    let pause = || std::thread::sleep(Duration::from_secs(1));
+    let result = if many {
+        serde_json::to_value(decide_many(raw, env, transport, clock, pause)?)
+    } else {
+        serde_json::to_value(decide(raw, env, transport, clock, pause)?)
+    }
+    .map_err(|err| err.to_string())?;
     if let Some(key) = cache_key {
         cache.insert(key, result.clone());
     }
@@ -329,5 +349,94 @@ mod tests {
         serve(&path, Duration::from_millis(300)).unwrap();
         assert!(!path.exists());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    struct ManyScript {
+        calls: Cell<usize>,
+    }
+
+    impl Transport for ManyScript {
+        fn post_json(&mut self, _body: &Value) -> Result<RawResponse, String> {
+            self.calls.set(self.calls.get() + 1);
+            Ok(RawResponse {
+                status: 200,
+                body: r#"{"model":"jev-1.13.0","answers":{"a":{"type":"noul","noul":0.2},"b":{"type":"noul","noul":0.6},"q":{"type":"noul","noul":0.4}}}"#.into(),
+            })
+        }
+    }
+
+    fn typesafe_env() -> Env {
+        Env {
+            backend: None,
+            api_key: Some("k".into()),
+        }
+    }
+
+    const MANY_LINE: &str = r#"{"state":"s","questions":{"a":{"type":"noul","instructions":"참인가?"},"b":{"type":"noul","instructions":"급한가?"}}}"#;
+
+    #[test]
+    fn questions_line_returns_answers_and_hits_the_cache() {
+        let mut script = ManyScript {
+            calls: Cell::new(0),
+        };
+        let mut cache = Cache::default();
+        let first = handle_line(MANY_LINE, &typesafe_env(), &mut script, &mut cache).unwrap();
+        let first: Value = serde_json::from_str(&first).unwrap();
+        assert_eq!(first["answers"]["a"]["noul"], 0.2);
+        assert_eq!(first["answers"]["b"]["noul"], 0.6);
+        assert_eq!(first["routing"]["backend"], "typesafe");
+        assert_eq!(first["routing"].get("cached"), None);
+        assert!(first.get("answer").is_none());
+        assert_eq!(script.calls.get(), 1);
+
+        let second = handle_line(MANY_LINE, &typesafe_env(), &mut script, &mut cache).unwrap();
+        let second: Value = serde_json::from_str(&second).unwrap();
+        assert_eq!(second["answers"]["b"]["noul"], 0.6);
+        assert_eq!(second["routing"]["cached"], true);
+        assert_eq!(second["latency_ms"], 0.0);
+        assert_eq!(script.calls.get(), 1, "동일 요청은 전송을 타지 않는다");
+    }
+
+    #[test]
+    fn reordered_questions_are_a_different_cache_entry() {
+        let mut script = ManyScript {
+            calls: Cell::new(0),
+        };
+        let mut cache = Cache::default();
+        handle_line(MANY_LINE, &typesafe_env(), &mut script, &mut cache).unwrap();
+        let reordered = r#"{"state":"s","questions":{"b":{"type":"noul","instructions":"급한가?"},"a":{"type":"noul","instructions":"참인가?"}}}"#;
+        handle_line(reordered, &typesafe_env(), &mut script, &mut cache).unwrap();
+        assert_eq!(script.calls.get(), 2);
+    }
+
+    #[test]
+    fn type_together_with_questions_is_rejected_without_a_call() {
+        let mut script = ManyScript {
+            calls: Cell::new(0),
+        };
+        let mut cache = Cache::default();
+        let line = r#"{"state":"s","type":"noul","instructions":"?","questions":{"a":{"type":"noul","instructions":"?"}}}"#;
+        let out = handle_line(line, &typesafe_env(), &mut script, &mut cache).unwrap();
+        let out: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(out["error"], "type과 questions는 함께 쓸 수 없습니다");
+        assert_eq!(script.calls.get(), 0);
+    }
+
+    #[test]
+    fn single_and_many_with_the_same_content_do_not_share_a_cache_entry() {
+        let mut script = ManyScript {
+            calls: Cell::new(0),
+        };
+        let mut cache = Cache::default();
+        let single = r#"{"state":"s","type":"noul","instructions":"참인가?"}"#;
+        let many = r#"{"state":"s","questions":{"q":{"type":"noul","instructions":"참인가?"}}}"#;
+        let one = handle_line(single, &typesafe_env(), &mut script, &mut cache).unwrap();
+        let one: Value = serde_json::from_str(&one).unwrap();
+        assert_eq!(one["answer"]["noul"], 0.4);
+        let out = handle_line(many, &typesafe_env(), &mut script, &mut cache).unwrap();
+        let out: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(out["answers"]["q"]["noul"], 0.4);
+        assert!(out["routing"].get("cached").is_none());
+        assert_eq!(script.calls.get(), 2, "단일과 다중은 캐시를 공유하지 않는다");
     }
 }
