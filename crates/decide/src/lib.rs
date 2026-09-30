@@ -3,6 +3,7 @@ pub mod daemon;
 pub mod local;
 pub mod mcp;
 pub mod protocol;
+pub mod show;
 pub mod typesafe;
 
 pub use backend::{decide, Backend, Env};
