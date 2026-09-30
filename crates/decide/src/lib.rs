@@ -6,5 +6,5 @@ pub mod protocol;
 pub mod show;
 pub mod typesafe;
 
-pub use backend::{decide, Backend, Env};
-pub use protocol::DecideResult;
+pub use backend::{decide, decide_many, Backend, Env};
+pub use protocol::{DecideManyResult, DecideResult};

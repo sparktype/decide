@@ -1,6 +1,6 @@
 # decide
 
-![decide 배너. 저울 한쪽에 호박색 돌이 놓여 있다.](docs/banner.jpg)
+![decide 배너. choice는 B, score는 3/5, noul은 0.82를 돌려준다.](docs/banner.svg)
 
 판단 한 건을 MCP 도구 `decide`로 연다. 문장을 생성하지 않고, 선택(`choice`)·순서형 점수(`score`)·확률(`noul`)을 돌려준다. 출력 형식은 고정돼 있다. 판단이 맞는지와는 별개다.
 
@@ -116,6 +116,25 @@ decide(state="이미 세 번째 문의입니다", instructions="고객의 불만
 - `noul`의 `answer.noul`은 참/거짓이 아니라 0.0에서 1.0 사이의 확률이다. 임계값은 부르는 쪽에서 정한다. 두 백엔드 모두 noul 답은 `type`과 `noul`만 가진다(`confidence` 없음).
 
 `instructions`는 상태를 바로 묻는 문장으로 쓴다. "Does the customer express satisfaction?"처럼. "Is this NOT a positive review?" 같은 반문은 방향이 쉽게 뒤집힌다. 갈림이 분명해야 하면 `noul` 대신 `choice`에 `positive`와 `negative`를 넣는 편이 안정적이다.
+
+### 질문 여러 개를 한 번에 (`decide_many`)
+
+같은 state에 대해 질문이 여러 개면 `decide_many`로 한 번에 보낸다. 백엔드 호출은 한 번이다. `questions`는 질문 id를 키로 하는 객체이고, 각 질문은 `decide`의 `type`, `instructions`, `options`, `criteria`와 같다.
+
+```text
+decide_many(
+  state="서버가 다운됐습니다. 결제 API가 500을 반환합니다.",
+  questions={
+    "urgent": {type: "noul",   instructions: "이 요청이 긴급한가?"},
+    "team":   {type: "choice", instructions: "어느 팀이 처리해야 하는가?", options: ["billing", "infra", "sales"]},
+    "anger":  {type: "score",  instructions: "고객의 불만 강도는?", criteria: ["낮음", "보통", "높음"]}
+  }
+)
+```
+
+반환은 `answers`(질문 id → 답, 입력 순서), `routing`, `latency_ms`다. 하나라도 검증에 실패하거나 백엔드가 실패하면 전체가 도구 오류이고 부분 결과는 없다. 검증 오류 앞에는 `질문 "<id>": `가 붙는다. 질문 개수 상한은 두지 않고 백엔드가 거절하는 대로 돌려준다. 로컬 서버에서는 질문 수에 비례해 시간이 든다(질문당 약 45ms. 같은 질문 3개를 한 번에 보낸 134ms와 따로 보낸 139ms가 사실상 같았다). 이점은 모델 지연이 아니라 에이전트의 도구 호출 횟수가 줄어드는 것이다.
+
+질문 하나하나는 yes/no나 단일 선택처럼 작게 쪼갠다. 복합 질문은 정확도가 떨어진다. 앞 답에 따라 뒤 질문을 정해야 하면 호출을 나눈다. `decide daemon` 소켓도 줄에 `questions`가 있으면 같은 모양으로 답한다(`type`과 함께 줄 수 없다).
 
 ### 에이전트가 쓸 때
 

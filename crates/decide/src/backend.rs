@@ -1,5 +1,7 @@
 use crate::local;
-use crate::protocol::{parse_arguments, validate, DecideResult};
+use crate::protocol::{
+    parse_arguments, parse_many, validate, validate_many, DecideManyResult, DecideResult,
+};
 use crate::typesafe::{self, LiveTransport, Transport};
 use serde_json::{json, Value};
 
@@ -60,10 +62,7 @@ pub fn decide<T: Transport>(
     let incoming = parse_arguments(raw)?;
     let question = validate(&incoming)?;
     let backend = select_backend(env.backend.as_deref(), env.api_key.as_deref())?;
-    let (name, label) = match backend {
-        Backend::Typesafe => ("typesafe", "TypeSafe"),
-        Backend::Local => ("local", "로컬"),
-    };
+    let (name, label) = labels(backend);
     if backend == Backend::Typesafe {
         if let Some(message) = typesafe::limit_error(&question) {
             return Err(message.to_string());
@@ -76,6 +75,46 @@ pub fn decide<T: Transport>(
     let (answer, model) = typesafe::map_response(&response, label)?;
     Ok(DecideResult {
         answer,
+        routing: json!({
+            "backend": name,
+            "model": model,
+        }),
+        latency_ms,
+    })
+}
+
+fn labels(backend: Backend) -> (&'static str, &'static str) {
+    match backend {
+        Backend::Typesafe => ("typesafe", "TypeSafe"),
+        Backend::Local => ("local", "로컬"),
+    }
+}
+
+pub fn decide_many<T: Transport>(
+    raw: &Value,
+    env: &Env,
+    transport: &mut T,
+    mut millis: impl FnMut() -> f64,
+    sleep: impl FnMut(),
+) -> Result<DecideManyResult, String> {
+    let incoming = parse_many(raw)?;
+    let questions = validate_many(&incoming)?;
+    let backend = select_backend(env.backend.as_deref(), env.api_key.as_deref())?;
+    let (name, label) = labels(backend);
+    if backend == Backend::Typesafe {
+        for (id, question) in &questions {
+            if let Some(message) = typesafe::limit_error(question) {
+                return Err(format!("질문 \"{id}\": {message}"));
+            }
+        }
+    }
+    let body = typesafe::request_body_many(&incoming.state, &questions);
+    let start = millis();
+    let response = typesafe::execute(transport, &body, label, sleep)?;
+    let latency_ms = millis() - start;
+    let (answers, model) = typesafe::map_answers(&response, &questions, label)?;
+    Ok(DecideManyResult {
+        answers,
         routing: json!({
             "backend": name,
             "model": model,
@@ -286,5 +325,140 @@ mod tests {
         assert_eq!(result.routing["model"], "jev-1.13.0");
         assert_eq!(result.answer["choice"], "billing");
         assert!(result.answer.get("action").is_none());
+    }
+
+    fn many_raw() -> Value {
+        json!({
+            "state": "서버 다운",
+            "questions": {
+                "urgent": {"type": "noul", "instructions": "긴급한가?"},
+                "team": {"type": "choice", "instructions": "어느 팀?", "options": ["billing", "infra"]}
+            }
+        })
+    }
+
+    const MANY_OK: &str = r#"{"model":"jev-1.13.0","answers":{"team":{"type":"choice","choice":"infra","probabilities":{"billing":0.1,"infra":0.9},"confidence":0.7},"urgent":{"type":"noul","noul":0.8}}}"#;
+
+    #[test]
+    fn many_maps_answers_in_request_order_with_one_call() {
+        let mut script = ok_script(MANY_OK);
+        let ticks = Cell::new(0.0);
+        let result = decide_many(
+            &many_raw(),
+            &env(None, Some("k")),
+            &mut script,
+            || {
+                let now = ticks.get();
+                ticks.set(now + 7.5);
+                now
+            },
+            || panic!("성공 응답은 재시도하지 않는다"),
+        )
+        .unwrap();
+        assert_eq!(script.calls.get(), 1);
+        assert_eq!(result.latency_ms, 7.5);
+        assert_eq!(result.routing["backend"], "typesafe");
+        assert_eq!(result.routing["model"], "jev-1.13.0");
+        let ids: Vec<&String> = result.answers.as_object().unwrap().keys().collect();
+        assert_eq!(ids, vec!["urgent", "team"]);
+        assert_eq!(result.answers["team"]["choice"], "infra");
+        assert_eq!(result.answers["urgent"]["noul"], 0.8);
+    }
+
+    #[test]
+    fn many_validation_error_makes_no_call() {
+        let mut script = Script {
+            responses: vec![],
+            calls: Cell::new(0),
+        };
+        let raw = json!({
+            "state": "s",
+            "questions": {
+                "ok": {"type": "noul", "instructions": "?"},
+                "team": {"type": "choice", "instructions": "?", "options": ["a"]}
+            }
+        });
+        let err = decide_many(&raw, &env(None, Some("k")), &mut script, || 0.0, || {}).unwrap_err();
+        assert!(err.starts_with("질문 \"team\": "), "{err}");
+        assert_eq!(script.calls.get(), 0);
+    }
+
+    #[test]
+    fn many_typesafe_limit_names_the_question_but_local_passes_through() {
+        let options: Vec<String> = (0..256).map(|i| i.to_string()).collect();
+        let raw = json!({
+            "state": "s",
+            "questions": {
+                "small": {"type": "noul", "instructions": "?"},
+                "big": {"type": "choice", "instructions": "?", "options": options}
+            }
+        });
+        let mut untouched = Script {
+            responses: vec![],
+            calls: Cell::new(0),
+        };
+        let err = decide_many(
+            &raw,
+            &env(Some("typesafe"), Some("k")),
+            &mut untouched,
+            || 0.0,
+            || {},
+        )
+        .unwrap_err();
+        assert_eq!(err, format!("질문 \"big\": {}", typesafe::CHOICE_LIMIT));
+        assert_eq!(untouched.calls.get(), 0);
+
+        let mut script = ok_script(
+            r#"{"model":"m","answers":{"small":{"type":"noul","noul":0.5},"big":{"type":"choice","choice":"0"}}}"#,
+        );
+        let result = decide_many(&raw, &env(Some("local"), None), &mut script, || 0.0, || {}).unwrap();
+        assert_eq!(script.calls.get(), 1);
+        assert_eq!(result.routing["backend"], "local");
+    }
+
+    #[test]
+    fn many_fails_entirely_on_backend_error_or_missing_answer() {
+        let mut down = Script {
+            responses: vec![Err("connection refused".into())],
+            calls: Cell::new(0),
+        };
+        let err = decide_many(
+            &many_raw(),
+            &env(Some("local"), None),
+            &mut down,
+            || 0.0,
+            || panic!("재시도하면 안 된다"),
+        )
+        .unwrap_err();
+        assert!(err.contains("로컬"), "{err}");
+        assert_eq!(down.calls.get(), 1);
+
+        let mut partial = ok_script(
+            r#"{"model":"m","answers":{"urgent":{"type":"noul","noul":0.8}}}"#,
+        );
+        let err = decide_many(&many_raw(), &env(None, Some("k")), &mut partial, || 0.0, || {})
+            .unwrap_err();
+        assert_eq!(err, "TypeSafe 응답에 answers.team가 없습니다");
+    }
+
+    #[test]
+    fn many_handles_a_hundred_questions_without_a_cap() {
+        let mut questions = serde_json::Map::new();
+        let mut answers = serde_json::Map::new();
+        for i in 0..100 {
+            questions.insert(
+                format!("q{i}"),
+                json!({"type": "noul", "instructions": "참인가?"}),
+            );
+            answers.insert(format!("q{i}"), json!({"type": "noul", "noul": 0.5}));
+        }
+        let raw = json!({"state": "s", "questions": questions});
+        let body = json!({"model": "m", "answers": answers}).to_string();
+        let mut script = ok_script(&body);
+        let result = decide_many(&raw, &env(None, Some("k")), &mut script, || 0.0, || {}).unwrap();
+        let ids: Vec<String> = result.answers.as_object().unwrap().keys().cloned().collect();
+        let expected: Vec<String> = (0..100).map(|i| format!("q{i}")).collect();
+        assert_eq!(ids, expected);
+        assert_eq!(script.calls.get(), 1);
     }
 }

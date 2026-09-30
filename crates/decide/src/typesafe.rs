@@ -23,8 +23,8 @@ pub fn limit_error(question: &Question) -> Option<&'static str> {
     }
 }
 
-pub fn request_body(state: &str, question: &Question) -> Value {
-    let q = match question {
+fn question_json(question: &Question) -> Value {
+    match question {
         Question::Choice {
             instructions,
             options,
@@ -51,12 +51,23 @@ pub fn request_body(state: &str, question: &Question) -> Value {
             "type": "noul",
             "instructions": instructions,
         }),
-    };
+    }
+}
+
+pub fn request_body_many(state: &str, questions: &[(String, Question)]) -> Value {
+    let mut map = Map::new();
+    for (id, question) in questions {
+        map.insert(id.clone(), question_json(question));
+    }
     json!({
         "model": MODEL,
         "state": state,
-        "questions": { "q": q },
+        "questions": Value::Object(map),
     })
+}
+
+pub fn request_body(state: &str, question: &Question) -> Value {
+    request_body_many(state, &[("q".to_string(), question.clone())])
 }
 
 pub fn authorization(key: &str) -> String {
@@ -100,6 +111,30 @@ pub fn map_response(body: &Value, label: &str) -> Result<(Value, String), String
         .cloned()
         .ok_or_else(|| format!("{label} 응답에 answers.q가 없습니다"))?;
     Ok((answer, model))
+}
+
+pub fn map_answers(
+    body: &Value,
+    questions: &[(String, Question)],
+    label: &str,
+) -> Result<(Value, String), String> {
+    let model = body
+        .get("model")
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("{label} 응답에 model이 없습니다"))?
+        .to_string();
+    let answers = body
+        .get("answers")
+        .and_then(Value::as_object)
+        .ok_or_else(|| format!("{label} 응답에 answers가 없습니다"))?;
+    let mut picked = Map::new();
+    for (id, _) in questions {
+        let answer = answers
+            .get(id)
+            .ok_or_else(|| format!("{label} 응답에 answers.{id}가 없습니다"))?;
+        picked.insert(id.clone(), answer.clone());
+    }
+    Ok((Value::Object(picked), model))
 }
 
 fn http_error(label: &str, status: u16, body: &str) -> String {
@@ -437,6 +472,84 @@ mod tests {
             .err()
             .unwrap();
         assert!(err.contains("jev-style serve"), "{err}");
+    }
+
+    fn many_questions() -> Vec<(String, Question)> {
+        vec![
+            ("긴급 여부".to_string(), noul()),
+            (
+                "team a".to_string(),
+                validate(&Incoming {
+                    state: "s".into(),
+                    kind: Kind::Choice,
+                    instructions: "어느 팀?".into(),
+                    options: vec!["billing".into(), "infra".into()],
+                    criteria: vec![],
+                })
+                .unwrap(),
+            ),
+        ]
+    }
+
+    #[test]
+    fn many_body_keeps_order_and_unicode_ids() {
+        let body = request_body_many("상태", &many_questions());
+        assert_eq!(body["model"], "jev-latest");
+        assert_eq!(body["state"], "상태");
+        let text = serde_json::to_string(&body["questions"]).unwrap();
+        assert!(text.find("긴급 여부").unwrap() < text.find("team a").unwrap());
+        assert_eq!(body["questions"]["긴급 여부"]["type"], "noul");
+        assert_eq!(body["questions"]["team a"]["criteria"]["infra"], "infra");
+    }
+
+    #[test]
+    fn single_body_is_the_one_question_case_of_many() {
+        let question = noul();
+        assert_eq!(
+            request_body("s", &question),
+            request_body_many("s", &[("q".to_string(), question.clone())])
+        );
+    }
+
+    #[test]
+    fn map_answers_picks_requested_ids_in_order_and_ignores_extras() {
+        let questions = many_questions();
+        let body = json!({
+            "model": "jev-1.13.0",
+            "answers": {
+                "team a": {"type": "choice", "choice": "infra"},
+                "여분": {"type": "noul", "noul": 0.1},
+                "긴급 여부": {"type": "noul", "noul": 0.9}
+            }
+        });
+        let (answers, model) = map_answers(&body, &questions, "TypeSafe").unwrap();
+        assert_eq!(model, "jev-1.13.0");
+        let ids: Vec<&String> = answers.as_object().unwrap().keys().collect();
+        assert_eq!(ids, vec!["긴급 여부", "team a"]);
+        assert_eq!(answers["긴급 여부"]["noul"], 0.9);
+        assert!(answers.get("여분").is_none());
+    }
+
+    #[test]
+    fn map_answers_fails_when_anything_is_missing() {
+        let questions = many_questions();
+        assert_eq!(
+            map_answers(&json!({"answers": {}}), &questions, "TypeSafe").unwrap_err(),
+            "TypeSafe 응답에 model이 없습니다"
+        );
+        assert_eq!(
+            map_answers(&json!({"model": "m"}), &questions, "로컬").unwrap_err(),
+            "로컬 응답에 answers가 없습니다"
+        );
+        assert_eq!(
+            map_answers(&json!({"model": "m", "answers": []}), &questions, "로컬").unwrap_err(),
+            "로컬 응답에 answers가 없습니다"
+        );
+        let missing = json!({"model": "m", "answers": {"긴급 여부": {"type": "noul", "noul": 0.5}}});
+        assert_eq!(
+            map_answers(&missing, &questions, "TypeSafe").unwrap_err(),
+            "TypeSafe 응답에 answers.team a가 없습니다"
+        );
     }
 
     #[test]

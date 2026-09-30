@@ -6,6 +6,11 @@
 
 ### 추가
 
+- MCP 도구 `decide_many`가 한 state에 질문 여러 개를 한 번의 백엔드 호출로 판단한다.
+  `questions`(id → 질문)를 받아 `answers`(입력 순서), `routing`, `latency_ms`를 돌려준다.
+  하나라도 실패하면 전체가 오류다. `decide` 도구는 바뀌지 않는다.
+- `decide daemon` 소켓 줄에 `questions`가 있으면 `decide_many`와 같은 모양으로 답하고 같은
+  LRU 캐시를 쓴다. `type`과 `questions`를 함께 주면 오류다.
 - `decide hook` 서브커맨드: Claude Code `PostToolUse` 훅 입력(`mcp__decide__decide`)을 읽어 질문, 선택과
   확률, 백엔드·모델·지연을 `systemMessage` 한 줄 요약으로 출력한다. 읽을 수 없는 입력에는 아무것도
   쓰지 않고 종료 코드 0이다. 실제 Claude Code 세션에서의 표시는 아직 확인하지 않았다.
