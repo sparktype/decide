@@ -9,12 +9,12 @@
 | `DECIDE_BACKEND` | 동작 |
 | --- | --- |
 | `typesafe` | `TYPESAFE_API_KEY`로 [TypeSafe.ai](https://api.typesafe.ai) Jev를 호출한다. 키가 비어 있으면 오류다. |
-| `local` | 로컬 Laya 체크포인트만 쓴다. 키는 읽지 않는다. |
+| `local` | 내 Mac에서 도는 `jev-style serve`만 호출한다. 키는 읽지 않는다. |
 | 없음 | 키가 있으면 TypeSafe, 없으면 로컬이다. |
 
-한 요청은 고른 백엔드에서만 끝난다. TypeSafe가 429 또는 529를 주면 그 요청만 1초 뒤에 한 번 더 보낸다. 401, 422, 연결 실패는 그 호출의 오류다. 두 백엔드의 확률을 서로 같은 값으로 맞추지는 않는다.
+한 요청은 고른 백엔드에서만 끝난다. 429 또는 529를 받으면 그 요청만 1초 뒤에 한 번 더 보낸다. 401, 422, 연결 실패는 그 호출의 오류다. 두 백엔드의 확률을 서로 같은 값으로 맞추지는 않는다.
 
-로컬 게시 필드 비교가 끝나기 전에는 `DECIDE_BACKEND=local`이 `로컬 백엔드가 아직 준비되지 않았습니다`를 반환한다.
+로컬 백엔드는 [Jev-Style-2B-Decision-v3](https://huggingface.co/chaoliangUNSW/Jev-Style-2B-Decision-v3-MLX)(MLX 8bit, 약 2GB, Apache-2.0)를 쓴다. `decide`가 모델을 직접 돌리지 않고, 따로 띄운 `jev-style serve`의 `/v1/systemone`을 호출한다. 그래서 로컬 백엔드에는 Python 서버가 필요하다. TypeSafe 백엔드는 필요 없다. 설정은 아래 "로컬 백엔드"를 본다.
 
 ## 붙이기
 
@@ -49,6 +49,27 @@ decide install
 
 이 폴더를 열면 `.claude/skills/decide/SKILL.md`도 같이 읽힌다. 도구를 언제 부르고 언제 직접 추론할지는 그 스킬이 안내한다.
 
+## 로컬 백엔드
+
+키가 없거나 `DECIDE_BACKEND=local`이면 `decide`는 `http://127.0.0.1:8765/v1/systemone`을 부른다. 그 주소에서 서버가 떠 있어야 한다. Apple Silicon Mac 전용이다(MLX).
+
+```bash
+# 한 번만. Python 3.12 가상환경에 설치한다. mlx-lm 0.31.3이 함께 고정돼 깔린다.
+uv venv jv --python 3.12
+uv pip install --python jv/bin/python "jev-style[mlx]"
+
+# 서버를 띄운다. 첫 실행은 가중치(약 2GB)를 받는다.
+jv/bin/jev-style serve --release 2b --precision 8bit
+```
+
+- 서버는 `127.0.0.1:8765`에만 열리고 인증이 없다. 모델 로딩에 몇 초 걸리니 뜬 뒤에 호출한다.
+- `HF_HUB_OFFLINE=1`인 환경이면 첫 실행에서 가중치를 받지 못한다. 그 명령에서만 `HF_HUB_OFFLINE=0`으로 실행해 미리 받아 둔다.
+- 다른 주소를 쓰려면 `decide`를 띄우는 환경에 `DECIDE_LOCAL_URL`을 넣는다.
+- 서버가 없으면 호출은 `로컬 연결에 실패했습니다: …. jev-style serve가 실행 중인지 확인하세요`라는 도구 오류로 끝난다. TypeSafe로 넘어가지 않는다.
+- 실측 지연은 첫 호출 약 1.7초, 이후 호출당 약 50~140ms다(M 시리즈 Mac, 짧은 입력).
+
+로컬 답은 TypeSafe 답과 같은 모양이다(`choice`/`score`/`noul`, choice·score의 `probabilities`와 `confidence`, score의 `legend`). 한국어 state도 받는다. 다만 한국어는 8문항 스모크 테스트로만 확인했고 정확도는 재지 않았다. 중요한 판단이면 `probabilities`를 보고 직접 확인한다.
+
 ## 사용법
 
 도구 인자는 다섯 개다.
@@ -61,7 +82,12 @@ decide install
 | `options` | `choice`일 때 서로 다른 선택지. 최소 2개 |
 | `criteria` | `score`일 때 낮은 쪽부터 나열한 등급. 최소 2개 |
 
-`noul`에는 `options`와 `criteria`를 넣지 않는다. TypeSafe에서 `choice` 옵션은 255개까지, `score` 등급은 10개까지다. 그 한도를 넘으면 호출 전에 오류가 난다.
+`noul`에는 `options`와 `criteria`를 넣지 않는다. 옵션 한도는 백엔드마다 다르다.
+
+| 백엔드 | `choice` 옵션 | `score` 등급 |
+| --- | --- | --- |
+| TypeSafe | 255개까지 | 10개까지. 넘으면 호출 전에 오류가 난다. |
+| 로컬 | 255개까지. 넘으면 서버가 422로 거절하고 그 메시지가 그대로 돌아온다. | 상한을 확인하지 못했다. |
 
 ```text
 decide(state="서버가 다운됐습니다", instructions="이 요청이 긴급한가?", type="noul")
@@ -73,13 +99,18 @@ decide(state="이미 세 번째 문의입니다", instructions="고객의 불만
 
 - `choice`의 `answer.choice`가 고른 라벨이고 `answer.confidence`가 신뢰도다.
 - `score`의 `answer.score`는 0부터 등급 개수−1 사이의 기대값이다.
-- `noul`의 `answer.noul`은 참/거짓이 아니라 0.0에서 1.0 사이의 확률이다. 임계값은 부르는 쪽에서 정한다. TypeSafe의 noul 답은 `type`과 `noul`만 가진다.
+- `noul`의 `answer.noul`은 참/거짓이 아니라 0.0에서 1.0 사이의 확률이다. 임계값은 부르는 쪽에서 정한다. 두 백엔드 모두 noul 답은 `type`과 `noul`만 가진다(`confidence` 없음).
 
 `instructions`는 상태를 바로 묻는 문장으로 쓴다. "Does the customer express satisfaction?"처럼. "Is this NOT a positive review?" 같은 반문은 방향이 쉽게 뒤집힌다. 갈림이 분명해야 하면 `noul` 대신 `choice`에 `positive`와 `negative`를 넣는 편이 안정적이다.
 
-호출이 실패하면 그 오류로 작업을 멈추지 않고 직접 추론해서 계속한다. 검증 오류와 백엔드 오류는 도구 오류로 돌아오고, 서버 세션은 유지된다.
+### 에이전트가 쓸 때
 
-키는 환경 변수 `TYPESAFE_API_KEY`로만 읽는다. 호출 주소는 `https://api.typesafe.ai/v1/systemone`이고, 요청의 `model`은 `jev-latest`다.
+- **언제 부르나.** 답이 선택지·등급·확률로 고정되는 판단 한 건일 때 부른다. 서술, 요약, 계획처럼 글을 만들어야 하는 일에는 쓰지 않는다.
+- **실패하면.** 그 오류로 작업을 멈추지 않고 직접 추론해서 계속한다. 검증 오류와 백엔드 오류는 도구 오류로 돌아오고, 서버 세션은 유지된다. 로컬 연결 실패는 `jev-style serve`가 안 떠 있다는 뜻이니 사용자에게 한 줄로 알린다.
+- **어느 백엔드가 답했나.** `routing.backend`를 본다. 같은 질문이라도 TypeSafe와 로컬의 확률은 보정이 달라 섞어서 비교하지 않는다.
+- **임계값.** `noul`을 조건으로 쓸 때 기준은 부르는 쪽이 정한다. 경계 근처(0.3~0.7)면 한 번 더 확인한다.
+
+키는 환경 변수 `TYPESAFE_API_KEY`로만 읽는다. TypeSafe 호출 주소는 `https://api.typesafe.ai/v1/systemone`이고, 요청의 `model`은 `jev-latest`다. 로컬 호출은 같은 본문을 인증 헤더 없이 보낸다.
 
 ## 개발
 
@@ -89,13 +120,13 @@ decide(state="이미 세 번째 문의입니다", instructions="고객의 불만
 cargo test --manifest-path crates/decide/Cargo.toml
 ```
 
-Python 패키지 `src/decide`와 `pytest`는 로컬 게시 필드 비교가 끝날 때까지 이 저장소에 있다. 비교에 쓰는 수동 확인은 `test_smoke.py`다.
+Python 패키지 `src/decide`와 `pytest`는 아직 이 저장소에 있다. 실행 검증(`cargo test`, TypeSafe 호출, 로컬 호출, 데몬 소켓)이 모두 끝나는 변경에서 지운다. 수동 확인은 `test_smoke.py`다.
 
 ```bash
 .venv/bin/python -m pytest
 .venv/bin/python test_smoke.py
 ```
 
-Stop 훅 `.claude/hooks/stop_verify.py`는 소켓이 없으면 `/opt/homebrew/bin/decide daemon`을 백그라운드로 띄우고, 그 호출은 통과시킨다. 노울 신뢰도 임계값(기본 0.4)은 `DECIDE_STOP_THRESHOLD` 환경 변수로 바꿀 수 있다.
+Stop 훅 `.claude/hooks/stop_verify.py`는 소켓이 없으면 `/opt/homebrew/bin/decide daemon`을 백그라운드로 띄우고, 그 호출은 통과시킨다. 백엔드가 로컬인데 `jev-style serve`가 없으면 데몬 호출이 오류가 되고, 훅은 그 오류를 통과로 처리한다. 두 백엔드의 확률은 보정이 달라서, 백엔드를 바꾸면 임계값이 여전히 맞는지 확인한다. 노울 신뢰도 임계값(기본 0.4)은 `DECIDE_STOP_THRESHOLD` 환경 변수로 바꿀 수 있다.
 
-설계는 `docs/superpowers/specs/2026-09-29-decide-rust-runtime-design.md`에 있다.
+설계는 `docs/superpowers/specs/2026-09-29-decide-rust-runtime-design.md`에 있다. 로컬 백엔드는 그 문서의 로컬 런타임 절을 대체하는 `docs/superpowers/specs/2026-09-30-decide-local-jev-style-design.md`를 따른다.

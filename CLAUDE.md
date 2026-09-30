@@ -8,15 +8,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 The installed program is the Rust binary `/opt/homebrew/bin/decide`. One process has two
 backends. `DECIDE_BACKEND=typesafe|local` selects one. When that variable is unset, a
 non-empty `TYPESAFE_API_KEY` selects TypeSafe Jev and an absent key selects local.
-A failed TypeSafe call stays on TypeSafe. The two backends are not calibrated to each
-other. TypeSafe `noul` answers contain `type` and `noul`. Local answers keep Laya's
-`system_one` keys, including `action`, once local inference is connected.
+A failed call stays on its backend. The two backends are not calibrated to each
+other. Both answer `noul` with only `type` and `noul`.
 
-Until the local published-field check passes, `DECIDE_BACKEND=local` returns
-`로컬 백엔드가 아직 준비되지 않았습니다` and does not infer. The Python package in
-`src/decide/` stays for that comparison and for `pytest`. Delete it only in the change
-that finishes the verification listed in
-`docs/superpowers/specs/2026-09-29-decide-rust-runtime-design.md`.
+The local backend does not run a model in this process. It POSTs the same body as TypeSafe
+to `jev-style serve` (`DECIDE_LOCAL_URL`, default `http://127.0.0.1:8765/v1/systemone`, no
+auth) and reads `answers.q`. The model is Jev-Style-2B-Decision-v3-MLX 8bit. That server is
+a separate Python install, so only the local backend needs Python. Design:
+`docs/superpowers/specs/2026-09-30-decide-local-jev-style-design.md`, which replaces the
+Laya ONNX/Candle runtime section of the 2026-09-29 design.
+
+The Python package in `src/decide/` and its `pytest` suite still exist. Delete them only in
+the change that finishes the execution verification listed in the 2026-09-30 design
+(`cargo test`, one TypeSafe call, one local call, one daemon socket call).
 
 ## Commands
 
@@ -48,7 +52,7 @@ One Rust test:
 cargo test --manifest-path crates/decide/Cargo.toml protocol::tests::noul_rejects_options_and_criteria
 ```
 
-Python package tests, still the comparison oracle:
+Python package tests (to be deleted with the execution verification above):
 
 ```bash
 .venv/bin/python -m pytest
@@ -78,9 +82,12 @@ or `.claude/settings.json`, restart Claude Code.
   `jev-latest`. Choice criteria are `{option: option}` in insertion order. Retry 429
   and 529 once after one second. Choice above 255 options and score above 10 levels
   fail before the request.
-- `local.rs` is the not-ready error until a runtime matches Laya 0.3.6 published
-  fields (`round(x, 4)`). Load English and multilingual only. Leave typed-decisions
-  unloaded.
+- `local.rs` holds the default local URL (`DEFAULT_URL`), `url()` (reads
+  `DECIDE_LOCAL_URL`) and the connect hint. `backend::live_transport` picks the
+  `LiveTransport` once per process: `typesafe(key)` or `local(url)` (no auth header).
+  `execute` and `map_response` take a label (`TypeSafe` or `로컬`) for error text.
+  The 255-option check runs only for TypeSafe; the local server enforces its own
+  255 cap with a 422 that is passed through.
 - `mcp.rs` speaks newline-delimited JSON-RPC. Tool failures are `isError` results.
 - `daemon.rs` serves one JSON line per connection. A live socket is left in place. A
   dead socket file is replaced. Idle exit uses `poll`. It also holds an in-process
