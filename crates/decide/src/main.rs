@@ -2,7 +2,7 @@ use decide::backend::{live_transport, Env};
 use decide::daemon;
 use decide::mcp::handle_message;
 use serde_json::Value;
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, Read, Write};
 use std::process::Command;
 
 const DECIDE_BIN: &str = "/opt/homebrew/bin/decide";
@@ -32,10 +32,27 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        Some("hook") => {
+            reject_extra(args.next());
+            run_hook();
+        }
         Some(other) => {
             eprintln!("알 수 없는 명령입니다: {other}");
             std::process::exit(2);
         }
+    }
+}
+
+fn run_hook() {
+    let mut input = String::new();
+    if io::stdin().read_to_string(&mut input).is_err() {
+        return;
+    }
+    let Ok(value) = serde_json::from_str::<Value>(&input) else {
+        return;
+    };
+    if let Some(text) = decide::show::render(&value) {
+        println!("{}", serde_json::json!({ "systemMessage": text }));
     }
 }
 
@@ -49,12 +66,13 @@ fn reject_extra(extra: Option<String>) {
 fn print_help() {
     println!(
         "\
-decide [mcp|daemon|install]
+decide [mcp|daemon|install|hook]
 
 인자 없이 실행하면 이 도움말이다.
   mcp      stdio MCP
   daemon   ~/.cache/decide/decide.sock
   install  claude mcp add로 Claude Code 사용자 스코프에 decide를 등록한다
+  hook     Claude Code PostToolUse 훅. decide 결과를 사용자에게 한 줄로 보여준다
 
 DECIDE_BACKEND=typesafe|local
 TYPESAFE_API_KEY가 있고 백엔드를 지정하지 않으면 TypeSafe Jev를 호출한다."
