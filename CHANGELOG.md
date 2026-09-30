@@ -2,6 +2,15 @@
 
 이 파일은 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/) 형식을 따른다.
 
+## [Unreleased]
+
+### 추가
+
+- `decide install --claude`: MCP 등록에 더해 표시 훅(`decide hook`)을 `~/.claude/settings.json`의
+  `hooks.PostToolUse`에 멱등하게 추가한다. 다른 설정은 순서까지 보존하고, 깨진 JSON이나 병합할 수
+  없는 모양이면 파일을 쓰지 않으며, 바꾸기 전에 `settings.json.bak-decide`로 백업한다. 그냥
+  `decide install`은 이전처럼 MCP만 등록한다.
+
 ## [0.0.5] - 2026-10-01
 
 ### 추가
