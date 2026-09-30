@@ -91,8 +91,11 @@ or `.claude/settings.json`, restart Claude Code.
   backend) so identical requests within one daemon lifetime skip the transport;
   cached answers carry `routing.cached: true` and `latency_ms: 0.0`. `decide mcp`
   is a fresh process per call and has no cache.
-- `main.rs` routes `mcp`, `daemon`, and `install` subcommands. No arguments prints
+- `main.rs` routes `mcp`, `daemon`, `install`, and `hook` subcommands. No arguments prints
   help. `install` shells out to `claude mcp add -s user decide -- <bin> mcp`.
+- `show.rs` turns a `PostToolUse` hook input for `mcp__decide__decide` into a user-facing summary
+  (`render(&Value) -> Option<String>`, pure). `decide hook` (`main.rs`) reads stdin, prints
+  `{"systemMessage": ...}` as one JSON line, and stays silent with exit 0 on anything unreadable.
 
 `.claude/hooks/stop_verify.py` remains a stdlib client. It spawns
 `/opt/homebrew/bin/decide daemon` with the hook environment and fail-opens when the

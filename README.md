@@ -145,6 +145,36 @@ decide_many(
 
 키는 환경 변수 `TYPESAFE_API_KEY`로만 읽는다. TypeSafe 호출 주소는 `https://api.typesafe.ai/v1/systemone`이고, 요청의 `model`은 `jev-latest`다. 로컬 호출은 같은 본문을 인증 헤더 없이 보낸다.
 
+## decide가 고른 것을 눈으로 보기
+
+에이전트가 `decide`를 부르면 결과는 도구 결과 안에 JSON으로만 있다. `decide hook`은 Claude Code `PostToolUse` 훅으로 붙어 질문과 결과를 한 줄 요약으로 사용자에게 보여준다. 공식 문서에 따르면 이 요약(`systemMessage`)은 사용자에게만 보이고 모델은 보지 않는다.
+
+```text
+🔎 decide가 선택했습니다: "푸시하고 PR 생성" (96%)
+   질문: 이 브랜치를 마무리하는 가장 적절한 방법은?
+   나머지: 브랜치를 그대로 유지 3% · main에 로컬로 머지 1% · 작업을 폐기 0%
+   typesafe · jev-1.13.0 · 203ms
+```
+
+`~/.claude/settings.json`(또는 프로젝트 설정)에 다음을 넣고 세션을 다시 연다.
+
+```json
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "mcp__decide__decide",
+        "hooks": [{"type": "command", "command": "/opt/homebrew/bin/decide hook", "timeout": 5}]
+      }
+    ]
+  }
+}
+```
+
+**아직 실제 Claude Code 세션에서 확인하지 않았다.** MCP 도구 결과가 훅에 어떤 모양으로 오는지(문자열, 객체, 배열)와 요약이 화면에 어떻게 보이는지는 문서로만 확인했다. `decide hook`은 세 모양을 모두 읽도록 만들었지만, 등록한 뒤 한 줄이 실제로 보이는지 직접 확인해 달라.
+
+끄려면 이 항목을 지운다. 읽을 수 없는 입력에는 아무것도 출력하지 않고 종료 코드 0이라 훅이 에이전트 작업을 막지 않는다. `decide_many`의 표시는 아직 없다. 훅은 `decide` 바이너리에 들어 있어서 이 기능이 들어간 릴리스 이후 버전에서만 동작한다.
+
 ## 개발
 
 런타임은 `crates/decide`다. 기본 테스트는 가중치와 네트워크 없이 돈다.
