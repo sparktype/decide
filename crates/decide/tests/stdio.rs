@@ -4,6 +4,7 @@ use std::process::{Command, Stdio};
 #[test]
 fn mcp_stdio_lists_the_tool_and_reports_local_not_ready() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_decide"))
+        .arg("mcp")
         .env("DECIDE_BACKEND", "local")
         .env_remove("TYPESAFE_API_KEY")
         .stdin(Stdio::piped())

@@ -8,7 +8,13 @@ fn mcp_json_and_stop_hook_use_the_homebrew_binary() {
         serde_json::from_str(&std::fs::read_to_string(root.join(".mcp.json")).unwrap()).unwrap();
     let decide = &config["mcpServers"]["decide"];
     assert_eq!(decide["command"], "/opt/homebrew/bin/decide");
-    assert_eq!(decide["args"].as_array().map(Vec::len), Some(0));
+    let args: Vec<&str> = decide["args"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap())
+        .collect();
+    assert_eq!(args, vec!["mcp"]);
     assert!(decide.get("env").is_none());
 
     let binary = Path::new("/opt/homebrew/bin/decide");
