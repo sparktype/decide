@@ -30,9 +30,7 @@ brew install sparktype/tap/decide
 decide install
 ```
 
-`decide install --claude`는 MCP 등록에 더해 표시 훅(`decide hook`, 아래 "decide가 고른 것을 눈으로 보기")도 `~/.claude/settings.json`에 넣는다. 그냥 `decide install`은 MCP만 등록한다.
-
-`brew install` 뒤에 위 명령을 실행하면 `claude mcp add -s user decide -- /opt/homebrew/bin/decide mcp`를 대신 실행해 Claude Code 사용자 스코프에 `decide`를 등록한다. `.mcp.json`을 손으로 고칠 필요는 없다. 이 저장소처럼 프로젝트 스코프로 등록하고 싶으면 `.mcp.json`을 직접 쓴다.
+`brew install` 뒤에 위 명령을 실행하면 `claude mcp add -s user decide -- /opt/homebrew/bin/decide mcp`를 대신 실행해 Claude Code 사용자 스코프에 `decide`를 등록한다. `.mcp.json`을 손으로 고칠 필요는 없다. `decide install --claude`는 여기에 더해 표시 훅(`decide hook`, 아래 "decide가 고른 것을 눈으로 보기")도 `~/.claude/settings.json`에 넣는다(0.0.6부터). 이 저장소처럼 프로젝트 스코프로 등록하고 싶으면 `.mcp.json`을 직접 쓴다.
 
 ```json
 {
@@ -183,7 +181,7 @@ decide install --claude
 
 **아직 실제 Claude Code 세션에서 확인하지 않았다.** MCP 도구 결과가 훅에 어떤 모양으로 오는지(문자열, 객체, 배열)와 요약이 화면에 어떻게 보이는지는 문서로만 확인했다. `decide hook`은 세 모양을 모두 읽도록 만들었지만, 등록한 뒤 한 줄이 실제로 보이는지 직접 확인해 달라.
 
-끄려면 `settings.json`의 `mcp__decide__decide` 훅 그룹을 지운다(제거 명령은 아직 없다). 문제가 생기면 `settings.json.bak-decide`가 바꾸기 전 원본이다. 읽을 수 없는 입력에는 아무것도 출력하지 않고 종료 코드 0이라 훅이 에이전트 작업을 막지 않는다. `decide_many`의 표시는 아직 없다. 훅은 `decide` 바이너리에 들어 있어서 이 기능이 들어간 릴리스 이후 버전에서만 동작한다.
+끄려면 `settings.json`의 `mcp__decide__decide` 훅 그룹을 지운다(제거 명령은 아직 없다). 문제가 생기면 `settings.json.bak-decide`가 바꾸기 전 원본이다. 읽을 수 없는 입력에는 아무것도 출력하지 않고 종료 코드 0이라 훅이 에이전트 작업을 막지 않는다. `decide_many`의 표시는 아직 없다. 훅은 `decide` 바이너리에 들어 있어서 0.0.5 이상에서만 동작한다.
 
 ## 개발
 
