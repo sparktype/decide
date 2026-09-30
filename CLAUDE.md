@@ -83,13 +83,20 @@ or `.claude/settings.json`, restart Claude Code.
   unloaded.
 - `mcp.rs` speaks newline-delimited JSON-RPC. Tool failures are `isError` results.
 - `daemon.rs` serves one JSON line per connection. A live socket is left in place. A
-  dead socket file is replaced. Idle exit uses `poll`.
+  dead socket file is replaced. Idle exit uses `poll`. It also holds an in-process
+  LRU (`MAX_CACHE_ENTRIES` = 64, keyed on the parsed request plus the resolved
+  backend) so identical requests within one daemon lifetime skip the transport;
+  cached answers carry `routing.cached: true` and `latency_ms: 0.0`. `decide mcp`
+  is a fresh process per call and has no cache.
 - `main.rs` routes `mcp`, `daemon`, and `install` subcommands. No arguments prints
   help. `install` shells out to `claude mcp add -s user decide -- <bin> mcp`.
 
 `.claude/hooks/stop_verify.py` remains a stdlib client. It spawns
 `/opt/homebrew/bin/decide daemon` with the hook environment and fail-opens when the
-socket is down.
+socket is down. Its noul confidence threshold (default 0.4) reads from
+`DECIDE_STOP_THRESHOLD`, falling back to 0.4 on a missing or unparsable value. This
+one file is tracked in git despite `.claude/` being gitignored — see the exception
+rule in `.gitignore`.
 
 **`noul` is a probability, 0.0–1.0.** Apply any threshold at the call site. Phrase
 `instructions` as a direct question. A rhetorical negation flips the direction

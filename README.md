@@ -69,7 +69,7 @@ decide(state="청구서가 중복 결제됐습니다", instructions="어느 팀�
 decide(state="이미 세 번째 문의입니다", instructions="고객의 불만 강도는?", type="score", criteria=["낮음", "보통", "높음"])
 ```
 
-반환은 `answer`, `routing`, `latency_ms`다. `routing.backend`는 `typesafe` 또는 `local`이다.
+반환은 `answer`, `routing`, `latency_ms`다. `routing.backend`는 `typesafe` 또는 `local`이다. `decide daemon`을 거친 호출이 이전 요청과 `state`·`type`·`instructions`·`options`·`criteria`·백엔드가 모두 같으면 `routing.cached`가 `true`이고 `latency_ms`는 0이다 — 이 캐시는 데몬 프로세스 안에서만 유지되고, `decide mcp`(요청마다 새 프로세스)에는 없다.
 
 - `choice`의 `answer.choice`가 고른 라벨이고 `answer.confidence`가 신뢰도다.
 - `score`의 `answer.score`는 0부터 등급 개수−1 사이의 기대값이다.
@@ -96,6 +96,6 @@ Python 패키지 `src/decide`와 `pytest`는 로컬 게시 필드 비교가 끝�
 .venv/bin/python test_smoke.py
 ```
 
-Stop 훅 `.claude/hooks/stop_verify.py`는 소켓이 없으면 `/opt/homebrew/bin/decide daemon`을 백그라운드로 띄우고, 그 호출은 통과시킨다.
+Stop 훅 `.claude/hooks/stop_verify.py`는 소켓이 없으면 `/opt/homebrew/bin/decide daemon`을 백그라운드로 띄우고, 그 호출은 통과시킨다. 노울 신뢰도 임계값(기본 0.4)은 `DECIDE_STOP_THRESHOLD` 환경 변수로 바꿀 수 있다.
 
 설계는 `docs/superpowers/specs/2026-09-29-decide-rust-runtime-design.md`에 있다.
