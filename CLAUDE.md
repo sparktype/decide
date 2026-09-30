@@ -31,7 +31,7 @@ brew install sparktype/tap/decide
 ```
 
 The published formula is `Formula/decide.rb` in `sparktype/homebrew-tap`. This repo's
-`packaging/homebrew/decide.rb` records the same install. Version is 0.0.3. GitHub
+`packaging/homebrew/decide.rb` records the same install. Version is 0.0.4. GitHub
 Actions builds `crates/decide` and uploads a release asset when a `v*` tag is pushed;
 the formula downloads that prebuilt arm64 binary and installs it, no Rust toolchain
 required at install time. The API key stays in the environment as `TYPESAFE_API_KEY`.
@@ -99,7 +99,7 @@ rule in `.gitignore`.
 
 **`noul` is a probability, 0.0–1.0.** Apply any threshold at the call site. Phrase
 `instructions` as a direct question. A rhetorical negation flips the direction
-unreliably. See `.claude/skills/decide/SKILL.md`.
+unreliably. See the README section "에이전트가 쓸 때".
 
 **Tests inject the backend.** Rust tests use a scripted transport and a fake clock.
 `tests/stop_hook.rs` runs `python3` against the hook's pure logic. Keep real-server

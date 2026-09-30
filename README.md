@@ -24,7 +24,7 @@ Apple Silicon Mac에서는 탭으로 깐다.
 brew install sparktype/tap/decide
 ```
 
-버전은 0.0.3이다. 바이너리는 `/opt/homebrew/bin/decide`다. formula는 GitHub Release에 올라간 사전 빌드 arm64 바이너리를 받아 그대로 설치한다 — 설치에 Rust 툴체인이 필요 없다. 가중치와 API 키는 병 밖에 둔다.
+버전은 0.0.4다. 바이너리는 `/opt/homebrew/bin/decide`다. formula는 GitHub Release에 올라간 사전 빌드 arm64 바이너리를 받아 그대로 설치한다 — 설치에 Rust 툴체인이 필요 없다. 가중치와 API 키는 병 밖에 둔다.
 
 ```bash
 decide install
@@ -47,7 +47,7 @@ decide install
 
 `decide mcp`가 stdio MCP다. 인자 없이 실행하면 도움말이다. `decide daemon`은 `~/.cache/decide/decide.sock`에서 JSON 한 줄을 받고, 30분 동안 요청이 없으면 끝난다. `--help`는 서버를 띄우지 않는다.
 
-이 폴더를 열면 `.claude/skills/decide/SKILL.md`도 같이 읽힌다. 도구를 언제 부르고 언제 직접 추론할지는 그 스킬이 안내한다.
+도구를 언제 부르고 언제 직접 추론할지는 아래 "에이전트가 쓸 때"를 따른다. 스킬 파일 `.claude/skills/decide/SKILL.md`는 `.gitignore` 대상이라 이 저장소에 포함되지 않는다.
 
 ## 로컬 백엔드
 
@@ -67,6 +67,20 @@ jv/bin/jev-style serve --release 2b --precision 8bit
 - 다른 주소를 쓰려면 `decide`를 띄우는 환경에 `DECIDE_LOCAL_URL`을 넣는다.
 - 서버가 없으면 호출은 `로컬 연결에 실패했습니다: …. jev-style serve가 실행 중인지 확인하세요`라는 도구 오류로 끝난다. TypeSafe로 넘어가지 않는다.
 - 실측 지연은 첫 호출 약 1.7초, 이후 호출당 약 50~140ms다(M 시리즈 Mac, 짧은 입력).
+
+### 로그인 때 자동으로 띄우기 (선택)
+
+서버를 매번 손으로 띄우기 싫으면 LaunchAgent로 등록할 수 있다. 템플릿은 `packaging/launchd/dev.sparktype.decide-local.plist`다. 서버를 홈 아래 고정 경로의 가상환경에 설치하고(템플릿이 그 경로를 쓴다), `__HOME__`을 채워 `~/Library/LaunchAgents/`에 둔다. 가중치를 미리 받아 둔 상태여야 한다. 템플릿은 `HF_HUB_OFFLINE=1`로 돈다.
+
+```bash
+uv venv ~/.local/share/decide/jev-style --python 3.12
+uv pip install --python ~/.local/share/decide/jev-style/bin/python "jev-style[mlx]"
+sed "s|__HOME__|$HOME|g" packaging/launchd/dev.sparktype.decide-local.plist \
+  > ~/Library/LaunchAgents/dev.sparktype.decide-local.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.sparktype.decide-local.plist
+```
+
+끄려면 `launchctl bootout gui/$(id -u)/dev.sparktype.decide-local`을 실행하고 plist를 지운다. 로그는 `~/Library/Logs/decide-local.log`다. 모델을 메모리에 올린 채 상주하므로 메모리를 쓴다(사용량은 재 보지 않았다). 이 템플릿은 문법만 검사했고 실제 기동은 검증하지 않았다.
 
 로컬 답은 TypeSafe 답과 같은 모양이다(`choice`/`score`/`noul`, choice·score의 `probabilities`와 `confidence`, score의 `legend`). 한국어 state도 받는다. 다만 한국어는 8문항 스모크 테스트로만 확인했고 정확도는 재지 않았다. 중요한 판단이면 `probabilities`를 보고 직접 확인한다.
 
