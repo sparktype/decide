@@ -26,20 +26,29 @@ pub fn render(input: &Value) -> Option<String> {
 }
 
 fn result_json(response: &Value) -> Option<Value> {
-    match response {
-        Value::String(text) => serde_json::from_str(text).ok(),
+    let from_text = |text: &Value| -> Option<Value> { serde_json::from_str(text.as_str()?).ok() };
+    let from_content =
+        |content: &Value| content.get(0).and_then(|item| item.get("text")).and_then(from_text);
+    let found = match response {
+        Value::String(_) => from_text(response),
+        Value::Array(_) => from_content(response),
         Value::Object(object) => {
             if object.get("isError").and_then(Value::as_bool) == Some(true) {
                 return None;
             }
-            if let Some(structured) = object.get("structuredContent") {
-                return Some(structured.clone());
+            if object.contains_key("answer") {
+                Some(response.clone())
+            } else {
+                object
+                    .get("structuredContent")
+                    .filter(|structured| structured.get("answer").is_some())
+                    .cloned()
+                    .or_else(|| object.get("content").and_then(from_content))
             }
-            let text = object.get("content")?.get(0)?.get("text")?.as_str()?;
-            serde_json::from_str(text).ok()
         }
         _ => None,
-    }
+    };
+    found.filter(|value| value.get("answer").is_some())
 }
 
 fn truncate(question: &str) -> String {
@@ -169,6 +178,37 @@ mod tests {
             "isError": false
         });
         assert_eq!(render(&hook_input(question, content_only)).unwrap(), NOUL_TEXT);
+    }
+
+    #[test]
+    fn accepts_a_bare_content_array() {
+        let response = json!([{"type": "text", "text": NOUL}]);
+        assert_eq!(
+            render(&hook_input("이 변경은 머지해도 될 만큼 검증되었는가?", response)).unwrap(),
+            NOUL_TEXT
+        );
+    }
+
+    #[test]
+    fn accepts_an_object_that_is_the_result_itself() {
+        let response = serde_json::from_str::<Value>(NOUL).unwrap();
+        assert_eq!(
+            render(&hook_input("이 변경은 머지해도 될 만큼 검증되었는가?", response)).unwrap(),
+            NOUL_TEXT
+        );
+    }
+
+    #[test]
+    fn falls_back_to_content_text_when_structured_content_has_no_answer() {
+        let response = json!({
+            "structuredContent": {},
+            "content": [{"type": "text", "text": NOUL}],
+            "isError": false
+        });
+        assert_eq!(
+            render(&hook_input("이 변경은 머지해도 될 만큼 검증되었는가?", response)).unwrap(),
+            NOUL_TEXT
+        );
     }
 
     #[test]
