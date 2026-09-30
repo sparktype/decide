@@ -1,5 +1,7 @@
 # decide Rust 런타임
 
+> 2026-09-30: 로컬 런타임 절(ONNX/Candle, Laya 게시 필드 일치)은 `2026-09-30-decide-local-jev-style-design.md`가 대체한다. 이 문서의 나머지와 Python 삭제 절차는 그대로 적용됐다.
+
 ## 배경
 
 `decide`는 판단 한 건을 MCP 도구 `decide`로 연다. 지금 구현은 Python 패키지

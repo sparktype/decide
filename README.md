@@ -120,12 +120,7 @@ decide(state="이미 세 번째 문의입니다", instructions="고객의 불만
 cargo test --manifest-path crates/decide/Cargo.toml
 ```
 
-Python 패키지 `src/decide`와 `pytest`는 아직 이 저장소에 있다. 실행 검증(`cargo test`, TypeSafe 호출, 로컬 호출, 데몬 소켓)이 모두 끝나는 변경에서 지운다. 수동 확인은 `test_smoke.py`다.
-
-```bash
-.venv/bin/python -m pytest
-.venv/bin/python test_smoke.py
-```
+이전 Python 패키지는 실행 검증(`cargo test`, TypeSafe 호출, 로컬 호출, 데몬 소켓)이 끝나 지웠다. 저장소에 남은 Python은 표준 라이브러리만 쓰는 Stop 훅 하나다. 테스트 명령은 `cargo test`뿐이다. 실서버(`jev-style serve`, TypeSafe 키)를 쓰는 확인은 기본 테스트에 넣지 않는다.
 
 Stop 훅 `.claude/hooks/stop_verify.py`는 소켓이 없으면 `/opt/homebrew/bin/decide daemon`을 백그라운드로 띄우고, 그 호출은 통과시킨다. 백엔드가 로컬인데 `jev-style serve`가 없으면 데몬 호출이 오류가 되고, 훅은 그 오류를 통과로 처리한다. 두 백엔드의 확률은 보정이 달라서, 백엔드를 바꾸면 임계값이 여전히 맞는지 확인한다. 노울 신뢰도 임계값(기본 0.4)은 `DECIDE_STOP_THRESHOLD` 환경 변수로 바꿀 수 있다.
 

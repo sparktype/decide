@@ -33,9 +33,9 @@
 
 ## 정리 (위 게이트 통과 후 같은 변경에서)
 
-- [ ] `src/decide/`, `tests/`의 Python 테스트, `test_smoke.py`, `pyproject.toml`, `.python-version` 삭제
+- [x] `src/decide/`, `tests/`의 Python 테스트, `test_smoke.py`, `pyproject.toml`, `.python-version` 삭제 (훅 임계값 검사는 `tests/stop_hook.rs`로 이전)
 - [x] README, CLAUDE.md의 로컬 백엔드·에이전트 사용 가이드 수정 (로컬 백엔드 설정, 한도 표, 에이전트 사용 지침)
-- [ ] README, CLAUDE.md의 pip·pytest 절 삭제 (Python 삭제와 같은 변경에서)
+- [x] README, CLAUDE.md의 pip·pytest 절 삭제
 - [ ] `.claude/skills/decide/SKILL.md`: 이 체크아웃에 없음(`.gitignore`가 `.claude/*`를 막음). README는 이 파일을 언급한다. 복원할지 README 문장을 고칠지 결정
-- [ ] `2026-09-29` 설계 문서 첫머리에 "로컬 런타임 절은 2026-09-30 문서로 대체" 한 줄 추가
+- [x] `2026-09-29` 설계 문서 첫머리에 "로컬 런타임 절은 2026-09-30 문서로 대체" 한 줄 추가
 - [ ] 버전 올리고 릴리스 (formula 체크섬 포함)

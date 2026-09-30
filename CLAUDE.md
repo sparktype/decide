@@ -18,9 +18,9 @@ a separate Python install, so only the local backend needs Python. Design:
 `docs/superpowers/specs/2026-09-30-decide-local-jev-style-design.md`, which replaces the
 Laya ONNX/Candle runtime section of the 2026-09-29 design.
 
-The Python package in `src/decide/` and its `pytest` suite still exist. Delete them only in
-the change that finishes the execution verification listed in the 2026-09-30 design
-(`cargo test`, one TypeSafe call, one local call, one daemon socket call).
+The old Python package (`src/decide/`, its `pytest` suite, `test_smoke.py`, `pyproject.toml`)
+was deleted once the execution verification in the 2026-09-30 design passed. The
+only Python left in the repo is the stdlib hook `.claude/hooks/stop_verify.py`.
 
 ## Commands
 
@@ -50,14 +50,6 @@ One Rust test:
 
 ```bash
 cargo test --manifest-path crates/decide/Cargo.toml protocol::tests::noul_rejects_options_and_criteria
-```
-
-Python package tests (to be deleted with the execution verification above):
-
-```bash
-.venv/bin/python -m pytest
-.venv/bin/python -m pytest tests/test_decide_impl.py::test_noul_builds_question_without_criteria -v
-.venv/bin/python test_smoke.py
 ```
 
 Daemon socket `~/.cache/decide/decide.sock`, 30 minutes idle:
@@ -110,5 +102,5 @@ rule in `.gitignore`.
 unreliably. See `.claude/skills/decide/SKILL.md`.
 
 **Tests inject the backend.** Rust tests use a scripted transport and a fake clock.
-Python tests still inject `predict_fn`. Keep real weight checks in `test_smoke.py`
-and out of the default suites.
+`tests/stop_hook.rs` runs `python3` against the hook's pure logic. Keep real-server
+checks (`jev-style serve`, a live TypeSafe key) out of the default suites.
