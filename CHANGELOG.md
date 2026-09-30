@@ -2,6 +2,16 @@
 
 이 파일은 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/) 형식을 따른다.
 
+## [Unreleased]
+
+### 추가
+
+- MCP 도구 `decide_many`가 한 state에 질문 여러 개를 한 번의 백엔드 호출로 판단한다.
+  `questions`(id → 질문)를 받아 `answers`(입력 순서), `routing`, `latency_ms`를 돌려준다.
+  하나라도 실패하면 전체가 오류다. `decide` 도구는 바뀌지 않는다.
+- `decide daemon` 소켓 줄에 `questions`가 있으면 `decide_many`와 같은 모양으로 답하고 같은
+  LRU 캐시를 쓴다. `type`과 `questions`를 함께 주면 오류다.
+
 ## [0.0.4] - 2026-09-30
 
 ### 추가
