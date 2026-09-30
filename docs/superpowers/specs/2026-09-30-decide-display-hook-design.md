@@ -47,8 +47,11 @@
 
 1. 문자열: JSON으로 파싱해 `{answer, routing, latency_ms}`로 읽는다.
 2. 객체 중 `structuredContent`가 있으면 그것을 쓴다.
-3. 객체 중 `content[0].text`가 있으면 그 문자열을 JSON으로 파싱한다.
-4. 그 밖이거나 파싱에 실패하거나 `answer`가 없으면 조용히 종료한다. 도구 오류(`isError`)도 조용히
+3. 객체 중 `content[0].text`가 있으면 그 문자열을 JSON으로 파싱한다. `structuredContent`에 `answer`가
+   없으면 이 경로로 폴백한다.
+4. 객체 자체에 `answer`가 있으면 그 객체가 결과다.
+5. 배열이면 `content` 배열로 보고 `[0].text`를 JSON으로 파싱한다.
+6. 그 밖이거나 파싱에 실패하거나 `answer`가 없으면 조용히 종료한다. 도구 오류(`isError`)도 조용히
    종료한다.
 
 ## 구성 변경
