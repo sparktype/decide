@@ -68,6 +68,20 @@ jv/bin/jev-style serve --release 2b --precision 8bit
 - 서버가 없으면 호출은 `로컬 연결에 실패했습니다: …. jev-style serve가 실행 중인지 확인하세요`라는 도구 오류로 끝난다. TypeSafe로 넘어가지 않는다.
 - 실측 지연은 첫 호출 약 1.7초, 이후 호출당 약 50~140ms다(M 시리즈 Mac, 짧은 입력).
 
+### 로그인 때 자동으로 띄우기 (선택)
+
+서버를 매번 손으로 띄우기 싫으면 LaunchAgent로 등록할 수 있다. 템플릿은 `packaging/launchd/dev.sparktype.decide-local.plist`다. 서버를 홈 아래 고정 경로의 가상환경에 설치하고(템플릿이 그 경로를 쓴다), `__HOME__`을 채워 `~/Library/LaunchAgents/`에 둔다. 가중치를 미리 받아 둔 상태여야 한다. 템플릿은 `HF_HUB_OFFLINE=1`로 돈다.
+
+```bash
+uv venv ~/.local/share/decide/jev-style --python 3.12
+uv pip install --python ~/.local/share/decide/jev-style/bin/python "jev-style[mlx]"
+sed "s|__HOME__|$HOME|g" packaging/launchd/dev.sparktype.decide-local.plist \
+  > ~/Library/LaunchAgents/dev.sparktype.decide-local.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.sparktype.decide-local.plist
+```
+
+끄려면 `launchctl bootout gui/$(id -u)/dev.sparktype.decide-local`을 실행하고 plist를 지운다. 로그는 `~/Library/Logs/decide-local.log`다. 모델을 메모리에 올린 채 상주하므로 메모리를 쓴다(사용량은 재 보지 않았다). 이 템플릿은 문법만 검사했고 실제 기동은 검증하지 않았다.
+
 로컬 답은 TypeSafe 답과 같은 모양이다(`choice`/`score`/`noul`, choice·score의 `probabilities`와 `confidence`, score의 `legend`). 한국어 state도 받는다. 다만 한국어는 8문항 스모크 테스트로만 확인했고 정확도는 재지 않았다. 중요한 판단이면 `probabilities`를 보고 직접 확인한다.
 
 ## 사용법
