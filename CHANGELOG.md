@@ -2,6 +2,14 @@
 
 이 파일은 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/) 형식을 따른다.
 
+## [Unreleased]
+
+### 추가
+
+- `decide hook` 서브커맨드: Claude Code `PostToolUse` 훅 입력(`mcp__decide__decide`)을 읽어 질문, 선택과
+  확률, 백엔드·모델·지연을 `systemMessage` 한 줄 요약으로 출력한다. 읽을 수 없는 입력에는 아무것도
+  쓰지 않고 종료 코드 0이다.
+
 ## [0.0.4] - 2026-09-30
 
 ### 추가
