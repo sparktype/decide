@@ -20,3 +20,7 @@ __pycache__/
 /.cursor/
 /.gemini/
 /.grok/
+
+# codegraph·zvec-grep 로컬 검색 인덱스. 재생성 가능하므로 커밋하지 않는다.
+/.codegraph/
+/.zvec-grep/
