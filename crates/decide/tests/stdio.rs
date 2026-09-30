@@ -2,10 +2,11 @@ use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 
 #[test]
-fn mcp_stdio_lists_the_tool_and_reports_local_not_ready() {
+fn mcp_stdio_lists_the_tool_and_reports_local_connection_failure() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_decide"))
         .arg("mcp")
         .env("DECIDE_BACKEND", "local")
+        .env("DECIDE_LOCAL_URL", "http://127.0.0.1:1/v1/systemone")
         .env_remove("TYPESAFE_API_KEY")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -42,7 +43,7 @@ fn mcp_stdio_lists_the_tool_and_reports_local_not_ready() {
     assert!(call["result"]["content"][0]["text"]
         .as_str()
         .unwrap()
-        .contains("로컬"));
+        .contains("jev-style serve"));
 
     let _ = child.kill();
     let _ = child.wait();

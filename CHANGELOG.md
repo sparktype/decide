@@ -2,6 +2,26 @@
 
 이 파일은 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/) 형식을 따른다.
 
+## [Unreleased]
+
+### 추가
+
+- `DECIDE_BACKEND=local`(또는 키 없음)이 `jev-style serve`의 `/v1/systemone`을 호출한다.
+  주소는 `DECIDE_LOCAL_URL`(기본 `http://127.0.0.1:8765/v1/systemone`)이고 인증 헤더를
+  보내지 않는다. 모델은 Jev-Style-2B-Decision-v3-MLX 8bit다. 응답은 `routing.backend: "local"`이다.
+- 로컬 연결 실패는 `jev-style serve` 실행을 안내하는 오류로 끝나고 다른 백엔드로 넘어가지 않는다.
+
+### 변경
+
+- choice 255개 한도 검사는 TypeSafe에서만 호출 전에 한다. 로컬은 서버가 422로 거절한다.
+- 오류 문구의 백엔드 이름이 TypeSafe 또는 로컬로 바뀐다.
+- 이전 Python 구현(`src/decide/`, `tests/`, `test_smoke.py`, `pyproject.toml`)을 지웠다.
+  Stop 훅의 임계값 검사는 `crates/decide/tests/stop_hook.rs`로 옮겼다.
+
+### 제거
+
+- "로컬 백엔드가 아직 준비되지 않았습니다" 오류.
+
 ## [0.0.3] - 2026-09-30
 
 ### 추가

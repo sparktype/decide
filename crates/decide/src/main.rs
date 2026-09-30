@@ -1,7 +1,6 @@
-use decide::backend::{nonempty, Env};
+use decide::backend::{live_transport, Env};
 use decide::daemon;
 use decide::mcp::handle_message;
-use decide::typesafe::LiveTransport;
 use serde_json::Value;
 use std::io::{self, BufRead, Write};
 use std::process::Command;
@@ -94,8 +93,7 @@ fn run_install() -> io::Result<()> {
 
 fn run_mcp() -> io::Result<()> {
     let env = Env::from_process();
-    let key = nonempty(env.api_key.as_deref()).unwrap_or("");
-    let mut transport = LiveTransport::new(key);
+    let mut transport = live_transport(&env);
     let stdin = io::stdin();
     let mut stdout = io::stdout();
     for line in stdin.lock().lines() {

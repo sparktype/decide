@@ -134,7 +134,6 @@ fn rpc_error(id: Value, code: i32, message: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::local;
     use crate::typesafe::{RawResponse, Transport};
     use std::cell::Cell;
 
@@ -203,7 +202,7 @@ mod tests {
     }
 
     #[test]
-    fn tool_call_returns_a_typesafe_answer_or_a_tool_error() {
+    fn tool_call_routes_to_typesafe_or_local() {
         let mut script = Script {
             status: 200,
             body: r#"{"model":"jev-1.13.0","answers":{"q":{"type":"noul","noul":0.25}}}"#.into(),
@@ -250,8 +249,11 @@ mod tests {
             &mut script,
         )
         .unwrap();
-        assert_eq!(response["result"]["isError"], true);
-        assert_eq!(response["result"]["content"][0]["text"], local::NOT_READY);
-        assert_eq!(script.calls.get(), 1);
+        assert_eq!(response["result"]["isError"], false);
+        assert_eq!(
+            response["result"]["structuredContent"]["routing"]["backend"],
+            "local"
+        );
+        assert_eq!(script.calls.get(), 2);
     }
 }
