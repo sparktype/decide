@@ -1,6 +1,6 @@
 # decide
 
-![decide 배너. 저울 한쪽에 호박색 돌이 놓여 있다.](docs/banner.jpg)
+![decide 배너. choice는 B, score는 3/5, noul은 0.82를 돌려준다.](docs/banner.svg)
 
 판단 한 건을 MCP 도구 `decide`로 연다. 문장을 생성하지 않고, 선택(`choice`)·순서형 점수(`score`)·확률(`noul`)을 돌려준다. 출력 형식은 고정돼 있다. 판단이 맞는지와는 별개다.
 

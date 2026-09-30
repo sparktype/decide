@@ -1,0 +1,50 @@
+<!-- decide 출력 세 종류(choice·score·noul)를 보여주는 README 배너 -->
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-label="decide 배너. choice는 B, score는 3/5, noul은 0.82를 돌려준다.">
+  <style>
+    .mono { font-family: "Berkeley Mono", "SF Mono", Menlo, monospace; }
+    .ko { font-family: "Noto Serif CJK KR", "Apple SD Gothic Neo", serif; }
+    .label { font-size: 22px; fill: #8a8f94; }
+    .val { font-size: 56px; fill: #d9a441; text-anchor: end; }
+  </style>
+  <rect width="1280" height="640" fill="#15181b"/>
+
+  <text x="80" y="330" class="mono" font-size="112" fill="#f5ecdc">decide</text>
+  <text x="84" y="386" class="ko" font-size="30" fill="#d9a441">로컬 판단 MCP</text>
+  <text x="84" y="436" class="mono" font-size="20" fill="#8a8f94">no generation. one typed answer.</text>
+
+  <g id="choice">
+    <rect x="580" y="75" width="620" height="150" rx="14" fill="#1d2126" stroke="#2c3238"/>
+    <text x="610" y="120" class="mono label">choice</text>
+    <g class="mono" font-size="24" text-anchor="middle">
+      <circle cx="630" cy="175" r="24" fill="none" stroke="#8a8f94" stroke-width="2"/>
+      <text x="630" y="184" fill="#8a8f94">A</text>
+      <circle cx="710" cy="175" r="24" fill="#d9a441"/>
+      <text x="710" y="184" fill="#15181b" font-weight="bold">B</text>
+      <circle cx="790" cy="175" r="24" fill="none" stroke="#8a8f94" stroke-width="2"/>
+      <text x="790" y="184" fill="#8a8f94">C</text>
+    </g>
+    <text x="1170" y="190" class="mono val">"B"</text>
+  </g>
+
+  <g id="score">
+    <rect x="580" y="245" width="620" height="150" rx="14" fill="#1d2126" stroke="#2c3238"/>
+    <text x="610" y="290" class="mono label">score</text>
+    <rect x="610" y="325" width="56" height="36" rx="6" fill="#d9a441"/>
+    <rect x="680" y="325" width="56" height="36" rx="6" fill="#d9a441"/>
+    <rect x="750" y="325" width="56" height="36" rx="6" fill="#d9a441"/>
+    <rect x="820" y="325" width="56" height="36" rx="6" fill="none" stroke="#8a8f94" stroke-width="2"/>
+    <rect x="890" y="325" width="56" height="36" rx="6" fill="none" stroke="#8a8f94" stroke-width="2"/>
+    <text x="1170" y="360" class="mono val">3 / 5</text>
+  </g>
+
+  <g id="noul">
+    <rect x="580" y="415" width="620" height="150" rx="14" fill="#1d2126" stroke="#2c3238"/>
+    <text x="610" y="460" class="mono label">noul</text>
+    <rect x="610" y="502" width="330" height="14" rx="7" fill="#2c3238"/>
+    <rect x="610" y="502" width="271" height="14" rx="7" fill="#d9a441"/>
+    <circle cx="881" cy="509" r="12" fill="#f5ecdc"/>
+    <text x="610" y="546" class="mono" font-size="16" fill="#8a8f94">0.0</text>
+    <text x="940" y="546" class="mono" font-size="16" fill="#8a8f94" text-anchor="end">1.0</text>
+    <text x="1170" y="530" class="mono val">0.82</text>
+  </g>
+</svg>
