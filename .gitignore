@@ -9,7 +9,14 @@ __pycache__/
 /graft/
 
 # graft/unwired가 세션마다 재생성하는 에이전트 연동 설정. 커밋 대상이 아니다.
-/.claude/
+# stop_verify.py는 decide의 실제 기능(Stop 훅)이라 예외로 다시 추적한다.
+# 전역 gitignore의 `.claude/` 규칙이 디렉터리 전체를 막으므로, 그 규칙을 먼저
+# 되돌린 뒤 이 저장소 안에서 다시 좁혀 막는다.
+!/.claude/
+/.claude/*
+!/.claude/hooks/
+/.claude/hooks/*
+!/.claude/hooks/stop_verify.py
 /.cursor/
 /.gemini/
 /.grok/

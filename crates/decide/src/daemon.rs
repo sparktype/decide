@@ -1,11 +1,45 @@
-use crate::backend::{decide, nonempty, Env};
+use crate::backend::{decide, nonempty, select_backend, Backend, Env};
+use crate::protocol::{parse_arguments, DecideResult, Incoming};
 use crate::typesafe::{LiveTransport, Transport};
 use serde_json::{json, Value};
+use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
+
+const MAX_CACHE_ENTRIES: usize = 64;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct CacheKey {
+    backend: Backend,
+    incoming: Incoming,
+}
+
+#[derive(Default)]
+pub struct Cache {
+    entries: HashMap<CacheKey, DecideResult>,
+    order: VecDeque<CacheKey>,
+}
+
+impl Cache {
+    fn get(&self, key: &CacheKey) -> Option<&DecideResult> {
+        self.entries.get(key)
+    }
+
+    fn insert(&mut self, key: CacheKey, value: DecideResult) {
+        if !self.entries.contains_key(&key) {
+            self.order.push_back(key.clone());
+            if self.order.len() > MAX_CACHE_ENTRIES {
+                if let Some(oldest) = self.order.pop_front() {
+                    self.entries.remove(&oldest);
+                }
+            }
+        }
+        self.entries.insert(key, value);
+    }
+}
 
 pub fn default_socket_path() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
@@ -28,12 +62,17 @@ pub fn claim_socket(path: &Path) -> std::io::Result<bool> {
     }
 }
 
-pub fn handle_line<T: Transport>(line: &str, env: &Env, transport: &mut T) -> Option<String> {
+pub fn handle_line<T: Transport>(
+    line: &str,
+    env: &Env,
+    transport: &mut T,
+    cache: &mut Cache,
+) -> Option<String> {
     if line.trim().is_empty() {
         return None;
     }
     let payload = match serde_json::from_str::<Value>(line) {
-        Ok(raw) => match call(&raw, env, transport) {
+        Ok(raw) => match call(&raw, env, transport, cache) {
             Ok(result) => {
                 serde_json::to_string(&result).unwrap_or_else(|err| error_json(&err.to_string()))
             }
@@ -48,15 +87,33 @@ fn call<T: Transport>(
     raw: &Value,
     env: &Env,
     transport: &mut T,
-) -> Result<crate::protocol::DecideResult, String> {
+    cache: &mut Cache,
+) -> Result<DecideResult, String> {
+    let cache_key = parse_arguments(raw).ok().and_then(|incoming| {
+        select_backend(env.backend.as_deref(), env.api_key.as_deref())
+            .ok()
+            .map(|backend| CacheKey { backend, incoming })
+    });
+    if let Some(key) = &cache_key {
+        if let Some(cached) = cache.get(key) {
+            let mut result = cached.clone();
+            result.routing["cached"] = json!(true);
+            result.latency_ms = 0.0;
+            return Ok(result);
+        }
+    }
     let origin = Instant::now();
-    decide(
+    let result = decide(
         raw,
         env,
         transport,
         || origin.elapsed().as_secs_f64() * 1000.0,
         || std::thread::sleep(Duration::from_secs(1)),
-    )
+    )?;
+    if let Some(key) = cache_key {
+        cache.insert(key, result.clone());
+    }
+    Ok(result)
 }
 
 fn error_json(message: &str) -> String {
@@ -75,9 +132,10 @@ pub fn serve(path: &Path, idle: Duration) -> std::io::Result<()> {
     let env = Env::from_process();
     let key = nonempty(env.api_key.as_deref()).unwrap_or("");
     let mut transport = LiveTransport::new(key);
+    let mut cache = Cache::default();
     loop {
         match accept_within(&listener, idle)? {
-            Some(stream) => handle_connection(stream, &env, &mut transport),
+            Some(stream) => handle_connection(stream, &env, &mut transport, &mut cache),
             None => break,
         }
     }
@@ -88,7 +146,12 @@ pub fn serve_default() -> std::io::Result<()> {
     serve(&default_socket_path(), Duration::from_secs(30 * 60))
 }
 
-fn handle_connection<T: Transport>(stream: UnixStream, env: &Env, transport: &mut T) {
+fn handle_connection<T: Transport>(
+    stream: UnixStream,
+    env: &Env,
+    transport: &mut T,
+    cache: &mut Cache,
+) {
     let _ = stream.set_read_timeout(None);
     let mut writer = match stream.try_clone() {
         Ok(writer) => writer,
@@ -98,7 +161,7 @@ fn handle_connection<T: Transport>(stream: UnixStream, env: &Env, transport: &mu
     if BufReader::new(stream).read_line(&mut line).is_err() {
         return;
     }
-    let Some(payload) = handle_line(&line, env, transport) else {
+    let Some(payload) = handle_line(&line, env, transport, cache) else {
         return;
     };
     let _ = writer.write_all(payload.as_bytes());
@@ -181,10 +244,12 @@ mod tests {
         let mut script = Script {
             calls: Cell::new(0),
         };
+        let mut cache = Cache::default();
         let line = handle_line(
             r#"{"state":"s","type":"noul","instructions":"참인가?"}"#,
             &env,
             &mut script,
+            &mut cache,
         )
         .unwrap();
         let parsed: Value = serde_json::from_str(&line).unwrap();
@@ -200,12 +265,37 @@ mod tests {
             r#"{"state":"s","type":"noul","instructions":"참인가?"}"#,
             &env,
             &mut script,
+            &mut cache,
         )
         .unwrap();
         let parsed: Value = serde_json::from_str(&err_line).unwrap();
         assert_eq!(parsed["error"], local::NOT_READY);
-        assert!(handle_line("\n", &env, &mut script).is_none());
+        assert!(handle_line("\n", &env, &mut script, &mut cache).is_none());
         assert_eq!(script.calls.get(), 1);
+    }
+
+    #[test]
+    fn identical_requests_hit_the_cache_and_skip_the_transport() {
+        let env = Env {
+            backend: None,
+            api_key: Some("k".into()),
+        };
+        let mut script = Script {
+            calls: Cell::new(0),
+        };
+        let mut cache = Cache::default();
+        let request = r#"{"state":"s","type":"noul","instructions":"참인가?"}"#;
+
+        let first = handle_line(request, &env, &mut script, &mut cache).unwrap();
+        let first: Value = serde_json::from_str(&first).unwrap();
+        assert_eq!(first["routing"].get("cached"), None);
+        assert_eq!(script.calls.get(), 1);
+
+        let second = handle_line(request, &env, &mut script, &mut cache).unwrap();
+        let second: Value = serde_json::from_str(&second).unwrap();
+        assert_eq!(second["answer"]["noul"], 0.8);
+        assert_eq!(second["routing"]["cached"], true);
+        assert_eq!(script.calls.get(), 1, "캐시가 있으면 두 번째 호출은 전송을 타지 않는다");
     }
 
     #[test]

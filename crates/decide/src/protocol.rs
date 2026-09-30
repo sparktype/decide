@@ -5,14 +5,14 @@ pub const CHOICE_TOO_FEW: &str = "choice 타입은 서로 다른 옵션이 최�
 pub const SCORE_TOO_FEW: &str = "score 타입은 등급이 최소 2개 필요합니다";
 pub const NOUL_EXTRA: &str = "noul 타입은 options/criteria를 받지 않습니다";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Kind {
     Choice,
     Score,
     Noul,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Incoming {
     pub state: String,
     pub kind: Kind,

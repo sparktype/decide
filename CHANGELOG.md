@@ -2,6 +2,25 @@
 
 이 파일은 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/) 형식을 따른다.
 
+## [미배포]
+
+### 추가
+
+- `decide daemon`이 상주 프로세스 안에서 동일한 (state, type, instructions,
+  options, criteria, 해석된 백엔드) 요청에 대한 응답을 최대 64개까지 캐싱한다.
+  캐시 적중 시 `routing.cached: true`, `latency_ms: 0.0`을 반환한다. `decide mcp`는
+  호출마다 새 프로세스라 캐시가 없다. Stop 훅처럼 세션당 여러 번 같은 상태로
+  daemon을 호출하는 소비자가 TypeSafe 재호출 비용을 아낀다.
+- `.claude/hooks/stop_verify.py`의 노울 신뢰도 임계값(기존 하드코드 0.4)을
+  `DECIDE_STOP_THRESHOLD` 환경 변수로 뺐다. 값이 없거나 숫자로 파싱되지 않으면
+  0.4로 되돌아간다(fail-open 원칙 유지).
+
+### 변경
+
+- `.gitignore`가 `.claude/`, `.cursor/`, `.gemini/`, `.grok/`를 통째로 무시하는
+  가운데, `.claude/hooks/stop_verify.py`만 예외로 다시 git에 추적한다 — 이
+  파일은 decide의 실제 기능(Stop 훅)이라 배포 대상이어야 하기 때문이다.
+
 ## [0.0.2] - 2026-09-30
 
 ### 변경

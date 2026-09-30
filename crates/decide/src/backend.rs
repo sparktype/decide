@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 pub const MISSING_KEY: &str = "TYPESAFE_API_KEY가 없습니다";
 pub const UNKNOWN_BACKEND: &str = "DECIDE_BACKEND는 typesafe 또는 local이어야 합니다";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Backend {
     Typesafe,
     Local,
