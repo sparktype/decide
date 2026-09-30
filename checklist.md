@@ -53,9 +53,9 @@
 - [x] 인터페이스 결정: 새 도구 `decide_many`
 - [x] 설계 확정(전부 성공/전부 실패, 상한은 백엔드에 맡김, `decide` 불변)
 - [x] 설계 문서 작성: `2026-09-30-decide-many-design.md`
-- [ ] 사용자가 설계 문서 검토·승인
-- [ ] 구현 계획 작성(`superpowers:writing-plans`)
-- [ ] 구현, `cargo test`, 로컬 실서버 다중 질문 실측
+- [x] 사용자가 설계 문서 검토·승인
+- [x] 구현 계획 작성(`docs/superpowers/plans/2026-09-30-decide-many.md`)
+- [x] 구현, `cargo test`(단위 42 + 통합 전부), 로컬 실서버 다중 질문 실측(한글 3문항 정상. 웜업 후 다중 134ms vs 단일 3회 139ms: 로컬은 지연 절감 없음)
 - [ ] TypeSafe 다중 질문 실호출 확인(키 필요, 사용자)
 
 ## 2. 인젝션 선검사 (1 이후)
