@@ -2,7 +2,7 @@
 
 이 파일은 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/) 형식을 따른다.
 
-## [Unreleased]
+## [0.0.4] - 2026-09-30
 
 ### 추가
 
