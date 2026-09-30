@@ -99,7 +99,7 @@ rule in `.gitignore`.
 
 **`noul` is a probability, 0.0–1.0.** Apply any threshold at the call site. Phrase
 `instructions` as a direct question. A rhetorical negation flips the direction
-unreliably. See `.claude/skills/decide/SKILL.md`.
+unreliably. See the README section "에이전트가 쓸 때".
 
 **Tests inject the backend.** Rust tests use a scripted transport and a fake clock.
 `tests/stop_hook.rs` runs `python3` against the hook's pure logic. Keep real-server

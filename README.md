@@ -47,7 +47,7 @@ decide install
 
 `decide mcp`가 stdio MCP다. 인자 없이 실행하면 도움말이다. `decide daemon`은 `~/.cache/decide/decide.sock`에서 JSON 한 줄을 받고, 30분 동안 요청이 없으면 끝난다. `--help`는 서버를 띄우지 않는다.
 
-이 폴더를 열면 `.claude/skills/decide/SKILL.md`도 같이 읽힌다. 도구를 언제 부르고 언제 직접 추론할지는 그 스킬이 안내한다.
+도구를 언제 부르고 언제 직접 추론할지는 아래 "에이전트가 쓸 때"를 따른다. 스킬 파일 `.claude/skills/decide/SKILL.md`는 `.gitignore` 대상이라 이 저장소에 포함되지 않는다.
 
 ## 로컬 백엔드
 
