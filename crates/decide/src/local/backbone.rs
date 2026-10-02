@@ -25,6 +25,16 @@ mod vendored_utils {
 
     // candle-transformers src/quantized_nn.rs::RmsNorm 그대로
     // (from_qtensor 생성자가 필요해 그대로 복제).
+    //
+    // Task 7 조사 노트: HF `transformers`의 `Qwen3_5RMSNorm.forward`는
+    // `_norm(x) * (1.0 + self.weight)`를 계산하는데, 이 GGUF(llama.cpp류
+    // 변환 도구)는 그 `1.0 + weight`를 변환 시점에 미리 더해 저장해둔다 —
+    // 실측으로 확인: `blk.0.attn_norm.weight[:8]`이 Python
+    // `(1 + layers[0].input_layernorm.weight)[:8]`와 소수 몇 자리까지
+    // 정확히 일치한다. 그래서 이 생성자에서 다시 1.0을 더하면 안 된다 —
+    // 처음에 "GGUF가 raw weight를 저장했을 것"이라고 가정하고 +1.0을
+    // 추가했다가, 실측 로짓이 기대값의 정확히 ~1.9~2.0배로 벌어지는 것을
+    // 보고(= (1+w)를 두 번 곱한 것과 동치) 되돌렸다.
     #[derive(Debug, Clone)]
     pub struct RmsNorm {
         weight: Tensor,
@@ -114,21 +124,31 @@ impl Module for MlpWeights {
     }
 }
 
+/// Qwen3.5는 head_dim(256) 전체가 아니라 그 일부(`partial_rotary_factor=0.25` →
+/// `rotary_dim=64`)에만 RoPE를 적용하고 나머지 192차원은 그대로 통과시킨다
+/// (HF `transformers`의 `models/qwen3_5/modeling_qwen3_5.py::apply_rotary_pos_emb`가
+/// `rotary_dim = cos.shape[-1]`로 앞쪽만 잘라 회전시키고 `q_pass`/`k_pass`를
+/// 그대로 이어붙이는 것으로 직접 확인했다). GGUF 메타데이터의
+/// `qwen3(5).rope.dimension_count`가 이 64를 그대로 담고 있다. Task 3가
+/// 벤더링한 PR #3396 원본은 이 구분이 없어 `head_dim` 전체(256)를 회전시켰다
+/// — Task 7의 parity 비교에서 이 차이가 로짓을 크게 틀어지게 하는 원인
+/// 중 하나였다(실측: 수정 전 최대 오차 5.0, 수정 후 — 아래 report 참고).
 #[derive(Debug, Clone)]
 struct RotaryEmbedding {
     sin: Tensor,
     cos: Tensor,
+    rotary_dim: usize,
 }
 
 impl RotaryEmbedding {
     fn new(
         dtype: DType,
-        head_dim: usize,
+        rotary_dim: usize,
         max_position_embeddings: usize,
         rope_theta: f64,
         dev: &Device,
     ) -> CandleResult<Self> {
-        let dim = head_dim;
+        let dim = rotary_dim;
         let max_seq_len = max_position_embeddings;
         let inv_freq: Vec<_> = (0..dim)
             .step_by(2)
@@ -143,15 +163,28 @@ impl RotaryEmbedding {
         Ok(Self {
             sin: freqs.sin()?,
             cos: freqs.cos()?,
+            rotary_dim,
         })
     }
 
     fn apply(&self, q: &Tensor, k: &Tensor, offset: usize) -> CandleResult<(Tensor, Tensor)> {
-        let (_, _, seq_len, _) = q.dims4()?;
+        let (_, _, seq_len, head_dim) = q.dims4()?;
         let cos = self.cos.narrow(0, offset, seq_len)?.to_dtype(q.dtype())?;
         let sin = self.sin.narrow(0, offset, seq_len)?.to_dtype(q.dtype())?;
-        let q_embed = candle_nn::rotary_emb::rope(&q.contiguous()?, &cos, &sin)?;
-        let k_embed = candle_nn::rotary_emb::rope(&k.contiguous()?, &cos, &sin)?;
+        if self.rotary_dim >= head_dim {
+            let q_embed = candle_nn::rotary_emb::rope(&q.contiguous()?, &cos, &sin)?;
+            let k_embed = candle_nn::rotary_emb::rope(&k.contiguous()?, &cos, &sin)?;
+            return Ok((q_embed, k_embed));
+        }
+        let pass_dim = head_dim - self.rotary_dim;
+        let q_rot = q.narrow(D::Minus1, 0, self.rotary_dim)?.contiguous()?;
+        let q_pass = q.narrow(D::Minus1, self.rotary_dim, pass_dim)?;
+        let k_rot = k.narrow(D::Minus1, 0, self.rotary_dim)?.contiguous()?;
+        let k_pass = k.narrow(D::Minus1, self.rotary_dim, pass_dim)?;
+        let q_embed = candle_nn::rotary_emb::rope(&q_rot, &cos, &sin)?;
+        let k_embed = candle_nn::rotary_emb::rope(&k_rot, &cos, &sin)?;
+        let q_embed = Tensor::cat(&[&q_embed, &q_pass], D::Minus1)?;
+        let k_embed = Tensor::cat(&[&k_embed, &k_pass], D::Minus1)?;
         Ok((q_embed, k_embed))
     }
 }
@@ -289,11 +322,15 @@ struct GatedDeltaNetWeights {
     conv_dim: usize,
     conv_kernel_size: usize,
 
-    in_proj_qkv: QMatMul,
-    in_proj_z: QMatMul,
-    in_proj_b: QMatMul,
-    in_proj_a: QMatMul,
-    out_proj: QMatMul,
+    // Task 7: 아래 네 투영과 out_proj는 `permute_v_heads_to_hf_order`로 헤드
+    // 순서를 보정해야 해서(정의부 주석 참고) 양자화된 QMatMul이 아니라
+    // 역양자화한 평문 Tensor로 들고 있다 — 로드 시 1회만 치환하면 되므로
+    // 매 forward 호출마다 다시 계산할 필요가 없다.
+    in_proj_qkv_weight: Tensor,
+    in_proj_z_weight: Tensor,
+    in_proj_b_weight: Tensor,
+    in_proj_a_weight: Tensor,
+    out_proj_weight: Tensor,
 
     conv1d_weight: Tensor,
     dt_bias_f32: Tensor,
@@ -320,22 +357,51 @@ impl GatedDeltaNetWeights {
         let key_dim = head_k_dim * num_k_heads;
         let value_dim = head_v_dim * num_v_heads;
         let conv_dim = key_dim * 2 + value_dim;
+        let device = gg.device.clone();
 
-        let (in_proj_qkv, _) = gg.qmatmul(&format!("{prefix}.attn_qkv.weight"))?;
-        let (in_proj_z, _) = gg.qmatmul(&format!("{prefix}.attn_gate.weight"))?;
-        let (in_proj_b, _) = gg.qmatmul(&format!("{prefix}.ssm_beta.weight"))?;
-        let (in_proj_a, _) = gg.qmatmul(&format!("{prefix}.ssm_alpha.weight"))?;
-        let (out_proj, _) = gg.qmatmul(&format!("{prefix}.ssm_out.weight"))?;
+        // attn_qkv.weight: (key_dim*2 + value_dim, hidden). q/k 구간(각
+        // num_k_heads 단위)은 GGUF와 HF 순서가 같지만 v 구간(num_v_heads
+        // 단위)은 치환이 필요하다 — Task 7에서 코사인 유사도로 직접 확인.
+        let qkv_raw = gg.tensor(&format!("{prefix}.attn_qkv.weight"))?.dequantize(&device)?;
+        let q_part = qkv_raw.narrow(0, 0, key_dim)?;
+        let k_part = qkv_raw.narrow(0, key_dim, key_dim)?;
+        let v_part = qkv_raw.narrow(0, key_dim * 2, value_dim)?;
+        let v_part = permute_v_heads_to_hf_order(&v_part, num_v_heads, num_k_heads, head_v_dim)?;
+        let in_proj_qkv_weight = Tensor::cat(&[&q_part, &k_part, &v_part], 0)?;
 
-        let conv1d_weight = gg
-            .tensor(&format!("{prefix}.ssm_conv1d.weight"))?
-            .dequantize(&gg.device)?
-            .unsqueeze(1)?;
+        let z_raw = gg.tensor(&format!("{prefix}.attn_gate.weight"))?.dequantize(&device)?;
+        let in_proj_z_weight = permute_v_heads_to_hf_order(&z_raw, num_v_heads, num_k_heads, head_v_dim)?;
+
+        let b_raw = gg.tensor(&format!("{prefix}.ssm_beta.weight"))?.dequantize(&device)?;
+        let in_proj_b_weight = permute_v_heads_to_hf_order(&b_raw, num_v_heads, num_k_heads, 1)?;
+
+        let a_raw = gg.tensor(&format!("{prefix}.ssm_alpha.weight"))?.dequantize(&device)?;
+        let in_proj_a_weight = permute_v_heads_to_hf_order(&a_raw, num_v_heads, num_k_heads, 1)?;
+
+        // ssm_out.weight: (hidden, value_dim) — 치환은 입력 쪽인 dim 1(열)에
+        // 적용해야 한다. permute_v_heads_to_hf_order는 dim 0 기준이므로
+        // 전치해서 적용한 뒤 다시 전치한다.
+        let out_raw = gg.tensor(&format!("{prefix}.ssm_out.weight"))?.dequantize(&device)?;
+        let out_proj_weight =
+            permute_v_heads_to_hf_order(&out_raw.t()?.contiguous()?, num_v_heads, num_k_heads, head_v_dim)?
+                .t()?
+                .contiguous()?;
+
+        // ssm_conv1d.weight: (conv_dim, kernel_size). q/k 채널 구간은 그대로,
+        // v 채널 구간(마지막 value_dim개)은 attn_qkv.weight의 v 구간과 같은
+        // 치환이 필요하다 — Task 7에서 직접 확인(코사인 유사도 ~1.0).
+        let conv1d_raw = gg.tensor(&format!("{prefix}.ssm_conv1d.weight"))?.dequantize(&gg.device)?;
+        let conv1d_qk = conv1d_raw.narrow(0, 0, key_dim * 2)?;
+        let conv1d_v = conv1d_raw.narrow(0, key_dim * 2, value_dim)?;
+        let conv1d_v = permute_v_heads_to_hf_order(&conv1d_v, num_v_heads, num_k_heads, head_v_dim)?;
+        let conv1d_weight = Tensor::cat(&[&conv1d_qk, &conv1d_v], 0)?.unsqueeze(1)?;
 
         let a_log = gg.tensor(&format!("{prefix}.ssm_a"))?.dequantize(&gg.device)?;
+        let a_log = permute_v_heads_to_hf_order(&a_log, num_v_heads, num_k_heads, 1)?;
         let dt_bias = gg
             .tensor(&format!("{prefix}.ssm_dt.bias"))?
             .dequantize(&gg.device)?;
+        let dt_bias = permute_v_heads_to_hf_order(&dt_bias, num_v_heads, num_k_heads, 1)?;
 
         let dt_bias_f32 = dt_bias.to_dtype(DType::F32)?;
         let neg_a_f32 = (&a_log.to_dtype(DType::F32)?.exp()? * -1.0)?;
@@ -353,11 +419,11 @@ impl GatedDeltaNetWeights {
             value_dim,
             conv_dim,
             conv_kernel_size,
-            in_proj_qkv,
-            in_proj_z,
-            in_proj_b,
-            in_proj_a,
-            out_proj,
+            in_proj_qkv_weight,
+            in_proj_z_weight,
+            in_proj_b_weight,
+            in_proj_a_weight,
+            out_proj_weight,
             conv1d_weight,
             dt_bias_f32,
             neg_a_f32,
@@ -457,13 +523,13 @@ impl GatedDeltaNetWeights {
         let (batch_size, seq_len, _) = hidden_states.dims3()?;
         let initial_dtype = hidden_states.dtype();
 
-        let mixed_qkv = self.in_proj_qkv.forward(hidden_states)?.transpose(1, 2)?;
+        let mixed_qkv = hidden_states.broadcast_matmul(&self.in_proj_qkv_weight.t()?)?.transpose(1, 2)?;
 
-        let z = self.in_proj_z.forward(hidden_states)?;
+        let z = hidden_states.broadcast_matmul(&self.in_proj_z_weight.t()?)?;
         let z = z.reshape((batch_size, seq_len, (), self.head_v_dim))?;
 
-        let b = self.in_proj_b.forward(hidden_states)?;
-        let a = self.in_proj_a.forward(hidden_states)?;
+        let b = hidden_states.broadcast_matmul(&self.in_proj_b_weight.t()?)?;
+        let a = hidden_states.broadcast_matmul(&self.in_proj_a_weight.t()?)?;
 
         let use_precomputed_states = self.conv_state.is_some() && seq_len == 1;
 
@@ -527,13 +593,49 @@ impl GatedDeltaNetWeights {
         let core_attn_out =
             core_attn_out.reshape((batch_size, seq_len, self.num_v_heads * self.head_v_dim))?;
 
-        self.out_proj.forward(&core_attn_out)
+        core_attn_out.broadcast_matmul(&self.out_proj_weight.t()?)
     }
 
     fn clear_kv_cache(&mut self) {
         self.conv_state = None;
         self.recurrent_state = None;
     }
+}
+
+/// Clef-flash의 GGUF 변환(llama.cpp류 도구)은 GatedDeltaNet의 `num_v_heads`(32)
+/// 단위로 쌓인 텐서(`attn_gate.weight`, `attn_qkv.weight`의 v 구간,
+/// `ssm_conv1d.weight`의 v 구간, `ssm_out.weight`의 입력(열) 쪽 v 구간,
+/// `ssm_beta.weight`, `ssm_alpha.weight`, `ssm_dt.bias`, `ssm_a`)를 HF
+/// `transformers`와 다른 헤드
+/// 순서로 저장한다. HF는 자연 순서(0..32)로 두지만, GGUF는
+/// `(num_v_heads/num_k_heads)`개 그룹으로 먼저 나눠(이 모델은 32/16=2그룹)
+/// "그룹 0의 모든 헤드 다음 그룹 1의 모든 헤드" 순서로 재배열한다 — 즉
+/// HF 헤드 i(0-based)는 GGUF 헤드 `(i % repeat) * num_k_heads + i / repeat`에
+/// 저장되어 있다. Task 7에서 실제 safetensors와 GGUF를 코사인 유사도로
+/// 직접 대조해 이 치환을 역설계했다(`ssm_beta.weight`의 HF 32행과 GGUF
+/// 32행 사이 최적 매칭이 정확히 이 패턴이었다 — 다른 어떤 텐서명 혼선이나
+/// 전치 문제가 아니라 이 치환 하나였다). q/k(`num_k_heads`=16 단위) 텐서와
+/// `ssm_norm.weight`(헤드 공유, `head_v_dim`=128 크기)는 이 문제가 없다 —
+/// 둘 다 직접 대조로 확인했다.
+///
+/// `tensor`는 dim 0이 `num_v_heads * unit`인 2D 이상 텐서(또는 1D 벡터,
+/// unit=1)다. 반환값은 dim 0을 HF 순서로 재배열한 텐서.
+fn permute_v_heads_to_hf_order(
+    tensor: &Tensor,
+    num_v_heads: usize,
+    num_k_heads: usize,
+    unit: usize,
+) -> CandleResult<Tensor> {
+    let repeat = num_v_heads / num_k_heads;
+    let mut indices = Vec::with_capacity(num_v_heads * unit);
+    for hf_head in 0..num_v_heads {
+        let gguf_head = (hf_head % repeat) * num_k_heads + hf_head / repeat;
+        for sub in 0..unit {
+            indices.push((gguf_head * unit + sub) as u32);
+        }
+    }
+    let index_tensor = Tensor::from_vec(indices, (num_v_heads * unit,), tensor.device())?;
+    tensor.index_select(&index_tensor, 0)
 }
 
 fn repeat_interleave(img: &Tensor, repeats: usize, dim: usize) -> CandleResult<Tensor> {
@@ -632,7 +734,6 @@ impl LayerWeights {
         x + residual
     }
 
-    #[allow(dead_code)]
     fn clear_kv_cache(&mut self) {
         match &mut self.token_mixer {
             TokenMixer::FullAttention(attn) => attn.clear_kv_cache(),
@@ -646,7 +747,8 @@ impl LayerWeights {
 // private). lm_head는 이 경로(hidden_states 추출)에서 쓰지 않지만 필드로는
 // 유지한다 — 추후 다른 경로가 필요해지면 재사용할 수 있고, GGUF에 없을 수도
 // 있는 output.weight 로드 실패 시 token_embd.weight로 대체하는 원본 로직도
-// 그대로 둔다.
+// 그대로 둔다. output_embeddings는 Task 7에서 joint_head의
+// option_lexical_projection이 필요로 하는 역양자화된 출력 임베딩 행렬이다.
 #[derive(Debug, Clone)]
 struct ModelWeights {
     embed_tokens: Embedding,
@@ -654,6 +756,7 @@ struct ModelWeights {
     norm: RmsNorm,
     #[allow(dead_code)]
     lm_head: QMatMul,
+    output_embeddings: Tensor,
     device: Device,
     dtype: DType,
     hidden_size: usize,
@@ -690,6 +793,9 @@ impl ModelWeights {
         let max_position_embeddings = md_get("qwen3.context_length")?.to_u32()? as usize;
         let rms_norm_eps = md_get("qwen3.attention.layer_norm_rms_epsilon")?.to_f32()? as f64;
         let rope_freq_base = md_get("qwen3.rope.freq_base")?.to_f32()? as f64;
+        // Qwen3.5는 head_dim(256) 전체가 아니라 이 값(64, partial_rotary_factor=0.25
+        // 적용 결과)만큼만 회전시킨다 — RotaryEmbedding 정의부 주석 참고.
+        let rope_dimension_count = md_get("qwen3.rope.dimension_count")?.to_u32()? as usize;
 
         let full_attention_interval = md_get("qwen3.full_attention_interval")?.to_u32()? as usize;
 
@@ -715,7 +821,7 @@ impl ModelWeights {
 
         let rotary = Arc::new(RotaryEmbedding::new(
             dtype,
-            head_dim,
+            rope_dimension_count,
             max_position_embeddings,
             rope_freq_base,
             device,
@@ -743,6 +849,12 @@ impl ModelWeights {
             Ok(tensor) => tensor,
             Err(_) => gg.tensor("token_embd.weight")?,
         };
+        // joint_head의 option_lexical_projection은 역양자화된 `(vocab, hidden)`
+        // 출력 임베딩 행렬에서 토큰별 행을 직접 모아 평균을 낸다(실제 Python
+        // 소스의 `output_embedding_weight[token_ids].mean(dim=0)`) — QMatMul의
+        // 전치 matmul 경로가 아니라 `index_select`로 바로 접근해야 하므로,
+        // lm_head(QMatMul)와는 별개로 평문 Tensor를 하나 더 들고 있는다.
+        let output_embeddings = lm_head_tensor.dequantize(device)?;
         let lm_head = QMatMul::from_qtensor(lm_head_tensor)?;
 
         Ok(Self {
@@ -750,6 +862,7 @@ impl ModelWeights {
             layers,
             norm,
             lm_head,
+            output_embeddings,
             device: device.clone(),
             dtype,
             hidden_size,
@@ -791,7 +904,24 @@ impl Backbone {
         self.inner.hidden_size
     }
 
+    /// 역양자화된 `(vocab_size, hidden_size)` 출력 임베딩 행렬. joint_head의
+    /// option_lexical_projection이 토큰별 문맥화되지 않은 임베딩을 평균 내는
+    /// 데 쓴다(실제 Python 소스 `output_embedding_weight[token_ids].mean(dim=0)`).
+    pub fn output_embeddings(&self) -> &Tensor {
+        &self.inner.output_embeddings
+    }
+
     pub fn hidden_states(&mut self, input_ids: &Tensor) -> Result<Tensor, String> {
+        // Task 7: `Runtime`(local/mod.rs)이 `Backbone`을 `OnceLock` 뒤에서 재사용하므로,
+        // 레이어별 KV 캐시(ConcatKvCache/GatedDeltaNet 상태)를 지우지 않으면
+        // 두 번째 호출의 시퀀스가 첫 번째 호출의 캐시 위에 이어붙어 길이가
+        // 어긋난다(실측: parity 테스트에서 두 번째 입력이 `[1,16,126,273]`처럼
+        // 이전 호출 길이 147과 섞인 273으로 깨짐). 이 메서드가 매번 완전히
+        // 새로운(멀티턴 생성이 아닌) 시퀀스를 받으므로, 매 호출 시작에서
+        // 모든 레이어의 캐시를 리셋한다.
+        for layer in &mut self.inner.layers {
+            layer.clear_kv_cache();
+        }
         let (b, l) = input_ids.dims2().map_err(|err| err.to_string())?;
         let mut h = self
             .inner
@@ -826,6 +956,31 @@ mod tests {
         let (q2, k2) = rotary.apply(&q, &k, 0).unwrap();
         assert_eq!(q2.dims(), q.dims());
         assert_eq!(k2.dims(), k.dims());
+    }
+
+    #[test]
+    fn partial_rotary_embedding_leaves_the_tail_dims_untouched() {
+        // Qwen3.5의 partial_rotary_factor=0.25 케이스: head_dim=256인데
+        // rotary_dim=64만 회전시키고 나머지 192차원은 입력 그대로 통과해야
+        // 한다 — RotaryEmbedding 정의부 주석 참고.
+        let device = Device::Cpu;
+        let rotary_dim = 64;
+        let head_dim = 256;
+        let rotary = RotaryEmbedding::new(DType::F32, rotary_dim, 4096, 10_000_000.0, &device).unwrap();
+        let q = Tensor::randn(0f32, 1f32, (1, 2, 3, head_dim), &device).unwrap();
+        let k = Tensor::randn(0f32, 1f32, (1, 2, 3, head_dim), &device).unwrap();
+        let (q2, k2) = rotary.apply(&q, &k, 0).unwrap();
+        assert_eq!(q2.dims(), q.dims());
+        assert_eq!(k2.dims(), k.dims());
+
+        let pass_dim = head_dim - rotary_dim;
+        let q_pass_before = q.narrow(3, rotary_dim, pass_dim).unwrap().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        let q_pass_after = q2.narrow(3, rotary_dim, pass_dim).unwrap().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        assert_eq!(q_pass_before, q_pass_after, "회전 적용 뒤에도 뒷부분(pass-through)은 입력과 같아야 한다");
+
+        let q_rot_before = q.narrow(3, 0, rotary_dim).unwrap().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        let q_rot_after = q2.narrow(3, 0, rotary_dim).unwrap().flatten_all().unwrap().to_vec1::<f32>().unwrap();
+        assert_ne!(q_rot_before, q_rot_after, "앞부분(rotary)은 회전으로 값이 바뀌어야 한다");
     }
 
     #[test]

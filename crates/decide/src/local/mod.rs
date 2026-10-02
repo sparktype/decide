@@ -1,11 +1,14 @@
 mod backbone;
 mod joint_head;
 mod postprocess;
-mod tokenizer;
+// parity 테스트(`crates/decide/tests/parity.rs`)가 `decide::local::tokenizer::spans`로
+// 실제 토큰 스팬을 검증해야 하므로 `pub`으로 재노출한다.
+pub mod tokenizer;
 
 use crate::protocol::Question;
 use serde_json::Value;
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
 
 pub const DEFAULT_URL: &str = "http://127.0.0.1:8765/v1/systemone";
 pub const CONNECT_HINT: &str = "jev-style serve가 실행 중인지 확인하세요";
@@ -37,8 +40,76 @@ pub fn weights_dir() -> Result<PathBuf, String> {
         .join("hub"))
 }
 
-pub fn infer(_state: &str, _question: &Question) -> Result<Value, String> {
-    Err(NOT_READY.to_string())
+struct Runtime {
+    backbone: Mutex<backbone::Backbone>,
+    joint_head: joint_head::JointHead,
+    tokenizer: LocalTokenizer,
+}
+
+static RUNTIME: OnceLock<Result<Runtime, String>> = OnceLock::new();
+
+fn runtime() -> &'static Result<Runtime, String> {
+    RUNTIME.get_or_init(|| {
+        let (backbone_path, head_path) = ensure_weights()?;
+        let backbone = backbone::Backbone::from_gguf_path(&backbone_path)?;
+        let hidden_size = backbone.hidden_size();
+        let joint_head = joint_head::JointHead::load(&head_path, hidden_size)?;
+        let tokenizer = LocalTokenizer::load()?;
+        Ok(Runtime {
+            backbone: Mutex::new(backbone),
+            joint_head,
+            tokenizer,
+        })
+    })
+}
+
+/// `question`에 대한 원시 로짓(softmax/sigmoid 이전) — `infer`와 parity 테스트가
+/// 공유하는 추론 경로.
+fn score(runtime: &Runtime, state: &str, question: &Question) -> Result<Vec<f32>, String> {
+    let (token_ids, offsets) = runtime.tokenizer.encode(state, question)?;
+    let (question_span, option_spans) = tokenizer::spans(state, question);
+    let device = candle_core::Device::Cpu;
+    let input_ids = candle_core::Tensor::new(token_ids.as_slice(), &device)
+        .map_err(|err| err.to_string())?
+        .unsqueeze(0)
+        .map_err(|err| err.to_string())?;
+    let (hidden_states, output_embeddings) = {
+        let mut backbone = runtime.backbone.lock().map_err(|_| "백본 락 획득에 실패했습니다".to_string())?;
+        let hidden_states = backbone.hidden_states(&input_ids)?;
+        let output_embeddings = backbone.output_embeddings().clone();
+        (hidden_states, output_embeddings)
+    };
+    let question_type = tokenizer::question_type_id(question);
+    runtime.joint_head.score(
+        &hidden_states,
+        &input_ids,
+        question_type,
+        &question_span,
+        &option_spans,
+        &offsets,
+        &output_embeddings,
+    )
+}
+
+pub fn infer(state: &str, question: &Question) -> Result<Value, String> {
+    let runtime = match runtime() {
+        Ok(runtime) => runtime,
+        Err(err) => return Err(err.clone()),
+    };
+    let logits = score(runtime, state, question)?;
+    Ok(postprocess::to_answer(question, &logits))
+}
+
+/// parity 테스트 전용 — postprocess(softmax/sigmoid) 이전의 원시 로짓을
+/// 그대로 돌려준다. Python 오라클(`scripts/clef_flash_oracle.py`)이 저장하는
+/// `logits`와 직접 비교할 수 있는 형태다.
+#[cfg(feature = "parity")]
+pub fn raw_logits(state: &str, question: &Question) -> Result<Vec<f32>, String> {
+    let runtime = match runtime() {
+        Ok(runtime) => runtime,
+        Err(err) => return Err(err.clone()),
+    };
+    score(runtime, state, question)
 }
 
 enum WeightsDecision {
@@ -110,12 +181,43 @@ impl LocalTokenizer {
         Ok(Self { inner })
     }
 
-    pub fn encode(&self, text: &str) -> Result<(Vec<u32>, Vec<(usize, usize)>), String> {
+    /// 세그먼트 하나를 토큰화한다. `add_special_tokens`는 항상 `false`다 —
+    /// 실제 `encode_record`가 모든 세그먼트를 `add_special_tokens=False`로
+    /// 토큰화하고, 특수 토큰(`<|im_start|>` 등)은 세그먼트 텍스트 자체에
+    /// 리터럴로 포함시킨다(모델이 그 리터럴을 단일 특수 토큰으로 병합하도록
+    /// 어휘에 등록되어 있다). 여기서 `true`를 주면 모델이 학습하지 않은
+    /// BOS/EOS가 끼어들어 Task 7에서 실측한 토큰 ID 시퀀스와 달라진다.
+    fn encode_segment(&self, text: &str) -> Result<(Vec<u32>, Vec<(usize, usize)>), String> {
         let encoding = self
             .inner
-            .encode(text, true)
+            .encode(text, false)
             .map_err(|err| format!("토큰화에 실패했습니다: {err}"))?;
         Ok((encoding.get_ids().to_vec(), encoding.get_offsets().to_vec()))
+    }
+
+    /// `tokenizer::segments()`가 내놓는 세그먼트들을 각각 개별적으로
+    /// 토큰화해 이어붙인다(세그먼트 경계를 넘는 BPE 병합을 막기 위해 —
+    /// `tokenizer.rs` 모듈 상단 주석 참고). 반환하는 오프셋은 세그먼트별
+    /// 바이트 오프셋을 전체 조립 텍스트 기준으로 이동(shift)한 값이라
+    /// `tokenizer::spans()`가 돌려주는 문자(바이트) 스팬과 같은 좌표계를
+    /// 쓴다.
+    pub fn encode(
+        &self,
+        state: &str,
+        question: &crate::protocol::Question,
+    ) -> Result<(Vec<u32>, Vec<(usize, usize)>), String> {
+        let mut ids = Vec::new();
+        let mut offsets = Vec::new();
+        let mut cursor = 0usize;
+        for seg in tokenizer::segments(state, question) {
+            if let tokenizer::Segment::Text(part) = seg {
+                let (seg_ids, seg_offsets) = self.encode_segment(&part)?;
+                ids.extend(seg_ids);
+                offsets.extend(seg_offsets.into_iter().map(|(s, e)| (s + cursor, e + cursor)));
+                cursor += part.len();
+            }
+        }
+        Ok((ids, offsets))
     }
 }
 
@@ -138,11 +240,14 @@ mod tests {
     }
 
     #[test]
-    fn infer_is_not_ready_before_the_gate() {
+    #[ignore] // 실제 가중치를 받아 추론을 돌린다 — CI 기본 실행에서 제외
+    fn infer_runs_end_to_end_with_real_weights() {
         let question = crate::protocol::Question::Noul {
             instructions: "참인가?".into(),
         };
-        assert_eq!(infer("상태", &question).unwrap_err(), NOT_READY);
+        let answer = infer("서버가 다운됐습니다", &question).unwrap();
+        assert_eq!(answer["type"], "noul");
+        assert!(answer["noul"].as_f64().is_some());
     }
 
     #[test]

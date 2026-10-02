@@ -1,4 +1,12 @@
-// 로컬 백엔드 로짓을 TypeSafe 응답과 같은 JSON 틀로 변환한다
+// 로컬 백엔드 로짓을 TypeSafe 응답과 같은 JSON 틀로 변환한다.
+//
+// 실제 Cloudflare/clef-flash 소스(joint_schema_model.py::systemone_answer)를
+// Task 7에서 대조한 결과, noul도 choice/score처럼 JointSchemaHead가 옵션당
+// 로짓 하나씩을 내고(옵션은 항상 true/false 둘), 그 둘을 softmax한 뒤
+// probabilities["true"]를 noul 확률로 쓴다 — 로짓 하나를 시그모이드에 넣는
+// 방식(Task 5가 가정했던 것)이 아니다. `tokenizer::option_entries`가 noul의
+// 옵션을 항상 [true, false] 순서로 내놓으므로, `JointHead::score`가 돌려주는
+// `logits[0]`이 true, `logits[1]`이 false에 대응한다.
 use crate::protocol::Question;
 use serde_json::{json, Map, Value};
 
@@ -16,8 +24,8 @@ fn round4(x: f64) -> f64 {
 pub fn to_answer(question: &Question, logits: &[f32]) -> Value {
     match question {
         Question::Noul { .. } => {
-            let p = 1.0 / (1.0 + (-logits[0] as f64).exp());
-            json!({"type": "noul", "noul": round4(p)})
+            let probs = softmax(logits);
+            json!({"type": "noul", "noul": round4(probs[0])})
         }
         Question::Choice { options, .. } => {
             let probs = softmax(logits);
@@ -67,12 +75,18 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn noul_logit_becomes_sigmoid_probability() {
+    fn noul_logits_become_softmax_true_probability() {
+        // 실제 모델은 noul도 [true, false] 두 옵션 로짓을 낸다 — 모듈 상단
+        // 주석 참고.
         let q = Question::Noul { instructions: "참인가?".into() };
-        let answer = to_answer(&q, &[0.0]);
+        let answer = to_answer(&q, &[0.0, 0.0]);
         assert_eq!(answer["type"], "noul");
         let noul = answer["noul"].as_f64().unwrap();
         assert!((noul - 0.5).abs() < 1e-6);
+
+        let confident = to_answer(&q, &[2.0, 0.0]);
+        let noul = confident["noul"].as_f64().unwrap();
+        assert!(noul > 0.5);
     }
 
     #[test]
