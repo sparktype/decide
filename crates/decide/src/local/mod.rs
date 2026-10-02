@@ -1,3 +1,5 @@
+mod tokenizer;
+
 use crate::protocol::Question;
 use serde_json::Value;
 use std::path::PathBuf;
