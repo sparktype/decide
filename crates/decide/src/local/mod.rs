@@ -26,11 +26,9 @@ fn clef_weights_is_set() -> bool {
 }
 
 pub fn weights_dir() -> Result<PathBuf, String> {
-    if let Ok(dir) = std::env::var("CLEF_WEIGHTS") {
-        let trimmed = dir.trim();
-        if !trimmed.is_empty() {
-            return Ok(PathBuf::from(trimmed));
-        }
+    if clef_weights_is_set() {
+        let dir = std::env::var("CLEF_WEIGHTS").expect("clef_weights_is_set()가 true이면 존재한다");
+        return Ok(PathBuf::from(dir.trim().to_string()));
     }
     let home = std::env::var("HOME").map_err(|_| "HOME 환경변수를 읽을 수 없습니다".to_string())?;
     Ok(PathBuf::from(home)
@@ -43,20 +41,34 @@ pub fn infer(_state: &str, _question: &Question) -> Result<Value, String> {
     Err(NOT_READY.to_string())
 }
 
-pub fn ensure_weights() -> Result<(PathBuf, PathBuf), String> {
-    let dir = weights_dir()?;
+enum WeightsDecision {
+    Found(PathBuf, PathBuf),
+    HardError(String),
+    NeedsDownload,
+}
+
+fn resolve_weights(dir: &std::path::Path) -> WeightsDecision {
     let backbone_path = dir.join("clef-flash.Q4_K_M.gguf");
     let head_path = dir.join("joint_head.safetensors");
     if backbone_path.exists() && head_path.exists() {
-        return Ok((backbone_path, head_path));
+        return WeightsDecision::Found(backbone_path, head_path);
     }
     if clef_weights_is_set() {
-        return Err(format!(
+        return WeightsDecision::HardError(format!(
             "CLEF_WEIGHTS={}에서 가중치 파일을 찾을 수 없습니다 (clef-flash.Q4_K_M.gguf, joint_head.safetensors 필요)",
             dir.display()
         ));
     }
-    download_weights(&dir)
+    WeightsDecision::NeedsDownload
+}
+
+pub fn ensure_weights() -> Result<(PathBuf, PathBuf), String> {
+    let dir = weights_dir()?;
+    match resolve_weights(&dir) {
+        WeightsDecision::Found(backbone_path, head_path) => Ok((backbone_path, head_path)),
+        WeightsDecision::HardError(err) => Err(err),
+        WeightsDecision::NeedsDownload => download_weights(&dir),
+    }
 }
 
 fn download_weights(dir: &std::path::Path) -> Result<(PathBuf, PathBuf), String> {
@@ -165,31 +177,28 @@ mod tests {
     #[test]
     fn ensure_weights_treats_empty_clef_weights_as_unset() {
         // CLEF_WEIGHTS="" (설정은 됐지만 빈 값)은 weights_dir()의 정의상 "미설정"과
-        // 같아야 한다. HOME을 가짜 캐시 디렉터리로 돌려서, 하드 에러 분기를 타지
-        // 않고 (네트워크 호출 없이) 기존 파일을 그대로 찾아내는지로 "다운로드 경로로
-        // 빠진다"는 분기 선택을 관찰한다.
-        let original_home = std::env::var("HOME").ok();
-        let fake_home = std::env::temp_dir().join(format!("clef-fake-home-{}", std::process::id()));
-        let fake_hub = fake_home.join(".cache").join("huggingface").join("hub");
-        std::fs::create_dir_all(&fake_hub).unwrap();
-        std::fs::write(fake_hub.join("clef-flash.Q4_K_M.gguf"), b"fake").unwrap();
-        std::fs::write(fake_hub.join("joint_head.safetensors"), b"fake").unwrap();
-
-        std::env::set_var("HOME", &fake_home);
+        // 같아야 한다. 파일을 미리 깔아두지 않은 디렉터리를 써서 resolve_weights()의
+        // exists-체크를 반드시 지나치게 만들고, 그 다음 분기(clef_weights_is_set())가
+        // 하드 에러가 아니라 다운로드로 가는지를 직접 관찰한다 — 수정 전 코드라면
+        // std::env::var("CLEF_WEIGHTS").is_ok()가 true이므로 HardError를 돌려주지만,
+        // 수정 후에는 trim 결과가 비어 있어 NeedsDownload여야 한다.
+        let dir = std::env::temp_dir().join(format!("clef-weights-decision-{}", std::process::id()));
+        std::fs::remove_dir_all(&dir).ok();
         std::env::set_var("CLEF_WEIGHTS", "");
 
-        let result = ensure_weights();
+        let decision = resolve_weights(&dir);
 
         std::env::remove_var("CLEF_WEIGHTS");
-        match original_home {
-            Some(home) => std::env::set_var("HOME", home),
-            None => std::env::remove_var("HOME"),
-        }
-        std::fs::remove_dir_all(&fake_home).ok();
 
-        let (backbone_path, head_path) = result.unwrap();
-        assert_eq!(backbone_path, fake_hub.join("clef-flash.Q4_K_M.gguf"));
-        assert_eq!(head_path, fake_hub.join("joint_head.safetensors"));
+        match decision {
+            WeightsDecision::NeedsDownload => {}
+            WeightsDecision::HardError(err) => {
+                panic!("CLEF_WEIGHTS=\"\"는 미설정으로 취급되어야 하는데 하드 에러가 반환됨: {err}")
+            }
+            WeightsDecision::Found(..) => {
+                panic!("파일을 깔아두지 않았는데 Found가 반환됨 — 테스트 전제가 깨짐")
+            }
+        }
     }
 
     #[test]
