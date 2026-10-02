@@ -63,9 +63,13 @@ fn runtime() -> &'static Result<Runtime, String> {
     })
 }
 
-/// `question`에 대한 원시 로짓(softmax/sigmoid 이전) — `infer`와 parity 테스트가
-/// 공유하는 추론 경로.
-fn score(runtime: &Runtime, state: &str, question: &Question) -> Result<Vec<f32>, String> {
+/// `question`에 대한 원시 로짓(softmax/sigmoid 이전), 옵션 라벨과 함께 —
+/// `infer`와 parity 테스트가 공유하는 추론 경로. 리뷰에서 발견된 버그
+/// 재발 방지: `JointHead::score`가 돌려주는 `(label, logit)` 쌍을 그대로
+/// 전달한다 — 라벨 없는 `Vec<f32>`로 바꿔 돌리면 호출부가 다시 "이 벡터와
+/// Question의 options/criteria가 같은 순서"라고 암묵적으로 가정하게 될
+/// 위험이 있다.
+fn score(runtime: &Runtime, state: &str, question: &Question) -> Result<Vec<(String, f32)>, String> {
     let (token_ids, offsets) = runtime.tokenizer.encode(state, question)?;
     let (question_span, option_spans) = tokenizer::spans(state, question);
     let device = candle_core::Device::Cpu;
@@ -96,15 +100,18 @@ pub fn infer(state: &str, question: &Question) -> Result<Value, String> {
         Ok(runtime) => runtime,
         Err(err) => return Err(err.clone()),
     };
-    let logits = score(runtime, state, question)?;
-    Ok(postprocess::to_answer(question, &logits))
+    let labeled_logits = score(runtime, state, question)?;
+    Ok(postprocess::to_answer(question, &labeled_logits))
 }
 
 /// parity 테스트 전용 — postprocess(softmax/sigmoid) 이전의 원시 로짓을
-/// 그대로 돌려준다. Python 오라클(`scripts/clef_flash_oracle.py`)이 저장하는
-/// `logits`와 직접 비교할 수 있는 형태다.
+/// `(옵션 label, 로짓)` 쌍으로 그대로 돌려준다. Python 오라클
+/// (`scripts/clef_flash_oracle.py`)이 저장하는 `logits`는 위치 기반
+/// 배열이므로, 호출부(parity.rs)가 `tokenizer::option_labels`로 같은
+/// 순서 규칙을 적용해 오라클 쪽에도 라벨을 붙인 뒤 라벨 기준으로
+/// 비교해야 한다.
 #[cfg(feature = "parity")]
-pub fn raw_logits(state: &str, question: &Question) -> Result<Vec<f32>, String> {
+pub fn raw_logits(state: &str, question: &Question) -> Result<Vec<(String, f32)>, String> {
     let runtime = match runtime() {
         Ok(runtime) => runtime,
         Err(err) => return Err(err.clone()),

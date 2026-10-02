@@ -353,6 +353,16 @@ impl JointHead {
     /// GGUF의 `output.weight`를 역양자화한 것) — `option_lexical_projection`이
     /// 쓰는, 문맥화되지 않은 토큰 임베딩 평균(`output_embedding_weight[token_ids].mean(dim=0)`,
     /// 실제 소스 그대로)을 계산하는 데 쓴다.
+    ///
+    /// 반환값은 `(옵션 label, 로짓)` 쌍이다 — `option_spans`가 이미
+    /// `tokenizer::option_entries()`가 정한 순서(choice는 알파벳 정렬,
+    /// score는 원래 순서, noul은 true/false 고정)로 들어오고, 로짓은 그
+    /// 순서 그대로 나온다. 리뷰에서 발견된 버그: 이전에는 `Vec<f32>`만
+    /// 돌려줘서, 호출부(`postprocess::to_answer`)가 그 벡터를
+    /// `Question::Choice.options`(호출자가 준, 정렬되지 않았을 수 있는
+    /// 원래 순서)와 위치로 zip했다 — `option_spans`의 정렬 순서와 다르면
+    /// 로짓이 잘못된 옵션 라벨에 붙는다. 이제 label을 로짓과 함께 묶어
+    /// 반환해 이 암묵적 "같은 순서" 가정을 코드에서 없앤다.
     pub fn score(
         &self,
         hidden_states: &Tensor,
@@ -362,7 +372,7 @@ impl JointHead {
         option_spans: &[OptionSpan],
         token_offsets: &[(usize, usize)],
         output_embeddings: &Tensor,
-    ) -> Result<Vec<f32>, String> {
+    ) -> Result<Vec<(String, f32)>, String> {
         if option_spans.is_empty() {
             return Err("joint_head 추론에는 옵션이 최소 1개 필요합니다".to_string());
         }
@@ -478,7 +488,12 @@ impl JointHead {
             let logits = (prior + (joint * self.residual_gate as f64)?)?;
             logits.to_vec1::<f32>()
         };
-        run().map_err(|err| format!("joint_head 추론에 실패했습니다: {err}"))
+        let logits = run().map_err(|err| format!("joint_head 추론에 실패했습니다: {err}"))?;
+        Ok(option_spans
+            .iter()
+            .map(|span| span.label.clone())
+            .zip(logits)
+            .collect())
     }
 }
 
@@ -515,6 +530,10 @@ mod tests {
             .score(&hidden, &input_ids, 1, &question_span, &option_spans, &token_offsets, &output_embeddings)
             .unwrap();
         assert_eq!(logits.len(), 2);
+        // 리뷰에서 발견된 버그 재발 방지: score()는 입력 option_spans의
+        // 라벨·순서를 그대로 돌려줘야 한다(positional하게만 맞는 게 아니라).
+        assert_eq!(logits[0].0, "a");
+        assert_eq!(logits[1].0, "b");
     }
 
     #[test]
@@ -545,6 +564,8 @@ mod tests {
             .score(&hidden, &input_ids, 0, &question_span, &option_spans, &token_offsets, &output_embeddings)
             .unwrap();
         assert_eq!(logits.len(), 2);
+        assert_eq!(logits[0].0, "true");
+        assert_eq!(logits[1].0, "false");
     }
 
     #[test]

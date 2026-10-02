@@ -69,6 +69,17 @@ fn instructions(question: &Question) -> &str {
     }
 }
 
+/// `option_entries()`가 정하는 옵션 라벨 순서만 꺼내 쓴다 — parity 테스트가
+/// Python 오라클의 위치 기반(positional) 로짓 배열에 라벨을 붙일 때
+/// 쓴다(Python 오라클도 `question_options()`로 같은 순서 규칙을 적용하므로
+/// 이 순서가 곧 오라클이 낸 로짓의 순서다). `local::infer`/`JointHead::score`
+/// 경로는 이미 `spans()`가 돌려주는 `OptionSpan.label`로 라벨을 들고 다니므로
+/// 이 함수를 쓰지 않는다 — 순수하게 "Rust 코드 밖(테스트)에서 같은 순서
+/// 규칙이 필요한 경우"를 위한 재노출이다.
+pub fn option_labels(question: &Question) -> Vec<String> {
+    option_entries(question).into_iter().map(|(id, _)| id).collect()
+}
+
 /// `joint_schema_model.py::question_options`와 동일한 (option_id, description)
 /// 순서. noul은 true/false 고정, choice는 criteria 키를 문자열 정렬, score는
 /// criteria(설명) 목록을 원래 순서대로 0부터 인덱싱한다.
