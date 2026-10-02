@@ -19,6 +19,12 @@ pub fn url() -> String {
         .unwrap_or_else(|| DEFAULT_URL.to_string())
 }
 
+fn clef_weights_is_set() -> bool {
+    std::env::var("CLEF_WEIGHTS")
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+}
+
 pub fn weights_dir() -> Result<PathBuf, String> {
     if let Ok(dir) = std::env::var("CLEF_WEIGHTS") {
         let trimmed = dir.trim();
@@ -44,7 +50,7 @@ pub fn ensure_weights() -> Result<(PathBuf, PathBuf), String> {
     if backbone_path.exists() && head_path.exists() {
         return Ok((backbone_path, head_path));
     }
-    if std::env::var("CLEF_WEIGHTS").is_ok() {
+    if clef_weights_is_set() {
         return Err(format!(
             "CLEF_WEIGHTS={}에서 가중치 파일을 찾을 수 없습니다 (clef-flash.Q4_K_M.gguf, joint_head.safetensors 필요)",
             dir.display()
@@ -154,6 +160,36 @@ mod tests {
 
         std::env::remove_var("CLEF_WEIGHTS");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn ensure_weights_treats_empty_clef_weights_as_unset() {
+        // CLEF_WEIGHTS="" (설정은 됐지만 빈 값)은 weights_dir()의 정의상 "미설정"과
+        // 같아야 한다. HOME을 가짜 캐시 디렉터리로 돌려서, 하드 에러 분기를 타지
+        // 않고 (네트워크 호출 없이) 기존 파일을 그대로 찾아내는지로 "다운로드 경로로
+        // 빠진다"는 분기 선택을 관찰한다.
+        let original_home = std::env::var("HOME").ok();
+        let fake_home = std::env::temp_dir().join(format!("clef-fake-home-{}", std::process::id()));
+        let fake_hub = fake_home.join(".cache").join("huggingface").join("hub");
+        std::fs::create_dir_all(&fake_hub).unwrap();
+        std::fs::write(fake_hub.join("clef-flash.Q4_K_M.gguf"), b"fake").unwrap();
+        std::fs::write(fake_hub.join("joint_head.safetensors"), b"fake").unwrap();
+
+        std::env::set_var("HOME", &fake_home);
+        std::env::set_var("CLEF_WEIGHTS", "");
+
+        let result = ensure_weights();
+
+        std::env::remove_var("CLEF_WEIGHTS");
+        match original_home {
+            Some(home) => std::env::set_var("HOME", home),
+            None => std::env::remove_var("HOME"),
+        }
+        std::fs::remove_dir_all(&fake_home).ok();
+
+        let (backbone_path, head_path) = result.unwrap();
+        assert_eq!(backbone_path, fake_hub.join("clef-flash.Q4_K_M.gguf"));
+        assert_eq!(head_path, fake_hub.join("joint_head.safetensors"));
     }
 
     #[test]
