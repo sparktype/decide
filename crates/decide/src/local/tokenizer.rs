@@ -65,7 +65,13 @@ pub fn schema_text(state: &str, question: &Question) -> String {
 pub fn spans(state: &str, question: &Question) -> (QuestionSpan, Vec<OptionSpan>) {
     let text = schema_text(state, question);
     let instr = instructions(question);
-    let instr_start = text.find(instr).expect("instructions 텍스트가 schema_text 안에 있어야 한다");
+    let header = "INSTRUCTION:";
+    let header_pos = text.find(header).expect("INSTRUCTION: 헤더가 schema_text 안에 있어야 한다");
+    let search_from = header_pos + header.len();
+    let instr_start = text[search_from..]
+        .find(instr)
+        .map(|offset| search_from + offset)
+        .expect("instructions 텍스트가 schema_text 안에 있어야 한다");
     let question_span = QuestionSpan {
         label: "q".to_string(),
         start_char: instr_start,
@@ -157,5 +163,19 @@ mod tests {
         assert_eq!(option_spans.len(), 2);
         assert_eq!(&text[option_spans[0].start_char..option_spans[0].end_char], "billing");
         assert_eq!(&text[option_spans[1].start_char..option_spans[1].end_char], "technical");
+    }
+
+    #[test]
+    fn question_span_is_not_confused_by_a_header_collision() {
+        // instructions가 "q"면 schema_text 맨 앞 "FIELD q"/"ID:q" 안의 "q"와
+        // 글자가 같다. instr_start는 INSTRUCTION: 헤더 뒤에서 찾아야 하며,
+        // 앞쪽 헤더의 "q"에 걸려서는 안 된다.
+        let q = Question::Noul { instructions: "q".into() };
+        let state = "s";
+        let (question_span, _) = spans(state, &q);
+        let text = schema_text(state, &q);
+        let header_pos = text.find("INSTRUCTION:").unwrap();
+        assert!(question_span.start_char > header_pos);
+        assert_eq!(&text[question_span.start_char..question_span.end_char], "q");
     }
 }
