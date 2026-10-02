@@ -37,6 +37,70 @@ pub fn infer(_state: &str, _question: &Question) -> Result<Value, String> {
     Err(NOT_READY.to_string())
 }
 
+pub fn ensure_weights() -> Result<(PathBuf, PathBuf), String> {
+    let dir = weights_dir()?;
+    let backbone_path = dir.join("clef-flash.Q4_K_M.gguf");
+    let head_path = dir.join("joint_head.safetensors");
+    if backbone_path.exists() && head_path.exists() {
+        return Ok((backbone_path, head_path));
+    }
+    if std::env::var("CLEF_WEIGHTS").is_ok() {
+        return Err(format!(
+            "CLEF_WEIGHTS={}에서 가중치 파일을 찾을 수 없습니다 (clef-flash.Q4_K_M.gguf, joint_head.safetensors 필요)",
+            dir.display()
+        ));
+    }
+    download_weights(&dir)
+}
+
+fn download_weights(dir: &std::path::Path) -> Result<(PathBuf, PathBuf), String> {
+    use hf_hub::api::sync::Api;
+    std::fs::create_dir_all(dir).map_err(|err| format!("가중치 디렉터리를 만들 수 없습니다: {err}"))?;
+    let api = Api::new().map_err(|err| format!("HuggingFace API 초기화에 실패했습니다: {err}"))?;
+
+    let backbone_repo = api.model("prithivMLmods/clef-flash-GGUF".to_string());
+    let backbone_src = backbone_repo
+        .get("clef-flash.Q4_K_M.gguf")
+        .map_err(|err| format!("백본 GGUF 다운로드에 실패했습니다: {err}"))?;
+    let backbone_dst = dir.join("clef-flash.Q4_K_M.gguf");
+    std::fs::copy(&backbone_src, &backbone_dst).map_err(|err| format!("백본 파일 복사에 실패했습니다: {err}"))?;
+
+    let head_repo = api.model("Cloudflare/clef-flash".to_string());
+    let head_src = head_repo
+        .get("joint_head.safetensors")
+        .map_err(|err| format!("joint_head 다운로드에 실패했습니다: {err}"))?;
+    let head_dst = dir.join("joint_head.safetensors");
+    std::fs::copy(&head_src, &head_dst).map_err(|err| format!("joint_head 파일 복사에 실패했습니다: {err}"))?;
+
+    Ok((backbone_dst, head_dst))
+}
+
+pub struct LocalTokenizer {
+    inner: tokenizers::Tokenizer,
+}
+
+impl LocalTokenizer {
+    pub fn load() -> Result<Self, String> {
+        let api = hf_hub::api::sync::Api::new()
+            .map_err(|err| format!("HuggingFace API 초기화에 실패했습니다: {err}"))?;
+        let repo = api.model("Cloudflare/clef-flash".to_string());
+        let tokenizer_path = repo
+            .get("tokenizer.json")
+            .map_err(|err| format!("tokenizer.json 다운로드에 실패했습니다: {err}"))?;
+        let inner = tokenizers::Tokenizer::from_file(&tokenizer_path)
+            .map_err(|err| format!("토크나이저 로드에 실패했습니다: {err}"))?;
+        Ok(Self { inner })
+    }
+
+    pub fn encode(&self, text: &str) -> Result<(Vec<u32>, Vec<(usize, usize)>), String> {
+        let encoding = self
+            .inner
+            .encode(text, true)
+            .map_err(|err| format!("토큰화에 실패했습니다: {err}"))?;
+        Ok((encoding.get_ids().to_vec(), encoding.get_offsets().to_vec()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -61,5 +125,43 @@ mod tests {
             instructions: "참인가?".into(),
         };
         assert_eq!(infer("상태", &question).unwrap_err(), NOT_READY);
+    }
+
+    #[test]
+    fn ensure_weights_finds_files_in_clef_weights_dir() {
+        let dir = std::env::temp_dir().join(format!("clef-weights-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("clef-flash.Q4_K_M.gguf"), b"fake").unwrap();
+        std::fs::write(dir.join("joint_head.safetensors"), b"fake").unwrap();
+        std::env::set_var("CLEF_WEIGHTS", &dir);
+
+        let (backbone_path, head_path) = ensure_weights().unwrap();
+        assert_eq!(backbone_path, dir.join("clef-flash.Q4_K_M.gguf"));
+        assert_eq!(head_path, dir.join("joint_head.safetensors"));
+
+        std::env::remove_var("CLEF_WEIGHTS");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn ensure_weights_errors_when_files_missing() {
+        let dir = std::env::temp_dir().join(format!("clef-weights-empty-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::env::set_var("CLEF_WEIGHTS", &dir);
+
+        let err = ensure_weights().unwrap_err();
+        assert!(err.contains("찾을 수 없습니다") || err.contains("다운로드"));
+
+        std::env::remove_var("CLEF_WEIGHTS");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    #[ignore] // 실제 네트워크로 HuggingFace에서 수 GB를 받는다 — CI 기본 실행에서 제외
+    fn ensure_weights_downloads_when_cache_empty() {
+        std::env::remove_var("CLEF_WEIGHTS");
+        let (backbone_path, head_path) = ensure_weights().unwrap();
+        assert!(backbone_path.exists());
+        assert!(head_path.exists());
     }
 }
