@@ -3,10 +3,19 @@ use std::process::{Command, Stdio};
 
 #[test]
 fn mcp_stdio_lists_the_tool_and_reports_local_connection_failure() {
+    // 가중치가 없는 빈 디렉터리를 `CLEF_WEIGHTS`로 지정해, 네트워크 다운로드
+    // 없이 결정론적으로 "가중치를 찾을 수 없다" 오류를 받는다 — 로컬
+    // 백엔드가 더 이상 HTTP(`jev-style serve`)를 호출하지 않고
+    // `local::infer`를 직접 호출하므로, 실패 모드도 가중치 유무로 바뀌었다.
+    let weights = std::env::temp_dir().join(format!(
+        "decide-stdio-empty-weights-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&weights).unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_decide"))
         .arg("mcp")
         .env("DECIDE_BACKEND", "local")
-        .env("DECIDE_LOCAL_URL", "http://127.0.0.1:1/v1/systemone")
+        .env("CLEF_WEIGHTS", &weights)
         .env_remove("TYPESAFE_API_KEY")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -43,10 +52,11 @@ fn mcp_stdio_lists_the_tool_and_reports_local_connection_failure() {
     assert!(call["result"]["content"][0]["text"]
         .as_str()
         .unwrap()
-        .contains("jev-style serve"));
+        .contains("찾을 수 없습니다"));
 
     let _ = child.kill();
     let _ = child.wait();
+    let _ = std::fs::remove_dir_all(&weights);
 }
 
 fn read_line(stdout: &mut BufReader<impl std::io::Read>) -> String {

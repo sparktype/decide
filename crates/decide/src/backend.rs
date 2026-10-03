@@ -3,7 +3,7 @@ use crate::protocol::{
     parse_arguments, parse_many, validate, validate_many, DecideManyResult, DecideResult,
 };
 use crate::typesafe::{self, LiveTransport, Transport};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 
 pub const MISSING_KEY: &str = "TYPESAFE_API_KEY가 없습니다";
 pub const UNKNOWN_BACKEND: &str = "DECIDE_BACKEND는 typesafe 또는 local이어야 합니다";
@@ -62,11 +62,22 @@ pub fn decide<T: Transport>(
     let incoming = parse_arguments(raw)?;
     let question = validate(&incoming)?;
     let backend = select_backend(env.backend.as_deref(), env.api_key.as_deref())?;
+    if backend == Backend::Local {
+        let start = millis();
+        let answer = local::infer(&incoming.state, &question)?;
+        let latency_ms = millis() - start;
+        return Ok(DecideResult {
+            answer,
+            routing: json!({
+                "backend": "local",
+                "model": "clef-flash",
+            }),
+            latency_ms,
+        });
+    }
     let (name, label) = labels(backend);
-    if backend == Backend::Typesafe {
-        if let Some(message) = typesafe::limit_error(&question) {
-            return Err(message.to_string());
-        }
+    if let Some(message) = typesafe::limit_error(&question) {
+        return Err(message.to_string());
     }
     let body = typesafe::request_body(&incoming.state, &question);
     let start = millis();
@@ -100,12 +111,27 @@ pub fn decide_many<T: Transport>(
     let incoming = parse_many(raw)?;
     let questions = validate_many(&incoming)?;
     let backend = select_backend(env.backend.as_deref(), env.api_key.as_deref())?;
-    let (name, label) = labels(backend);
-    if backend == Backend::Typesafe {
+    if backend == Backend::Local {
+        let start = millis();
+        let mut answers = Map::new();
         for (id, question) in &questions {
-            if let Some(message) = typesafe::limit_error(question) {
-                return Err(format!("질문 \"{id}\": {message}"));
-            }
+            let answer = local::infer(&incoming.state, question)?;
+            answers.insert(id.clone(), answer);
+        }
+        let latency_ms = millis() - start;
+        return Ok(DecideManyResult {
+            answers: Value::Object(answers),
+            routing: json!({
+                "backend": "local",
+                "model": "clef-flash",
+            }),
+            latency_ms,
+        });
+    }
+    let (name, label) = labels(backend);
+    for (id, question) in &questions {
+        if let Some(message) = typesafe::limit_error(question) {
+            return Err(format!("질문 \"{id}\": {message}"));
         }
     }
     let body = typesafe::request_body_many(&incoming.state, &questions);
@@ -124,10 +150,7 @@ pub fn decide_many<T: Transport>(
 }
 
 pub fn live_transport(env: &Env) -> LiveTransport {
-    match select_backend(env.backend.as_deref(), env.api_key.as_deref()) {
-        Ok(Backend::Local) => LiveTransport::local(&local::url()),
-        _ => LiveTransport::typesafe(nonempty(env.api_key.as_deref()).unwrap_or("")),
-    }
+    LiveTransport::typesafe(nonempty(env.api_key.as_deref()).unwrap_or(""))
 }
 
 pub fn nonempty(value: Option<&str>) -> Option<&str> {
@@ -210,9 +233,6 @@ mod tests {
         assert_eq!(script.calls.get(), 1);
     }
 
-    const NOUL_OK: &str =
-        r#"{"model":"jev-style-2b-decision-v3","answers":{"q":{"type":"noul","noul":0.9}}}"#;
-
     fn ok_script(body: &str) -> Script {
         Script {
             responses: vec![Ok(RawResponse {
@@ -223,25 +243,30 @@ mod tests {
         }
     }
 
+    // 로컬 백엔드는 더 이상 HTTP 전송(`typesafe::execute`)을 타지 않고
+    // `local::infer`를 직접 호출한다 — 가중치 유무에 따라 성공/실패가
+    // 환경마다 다르므로 그 결과는 단정하지 않고, TypeSafe transport가
+    // 호출되지 않았다는 것만 검사한다.
     #[test]
-    fn local_routes_the_server_answer_as_local() {
-        let mut script = ok_script(NOUL_OK);
-        let result = decide(
+    fn local_backend_does_not_call_typesafe() {
+        let mut script = Script {
+            responses: vec![],
+            calls: Cell::new(0),
+        };
+        let _ = decide(
             &noul(),
             &env(Some("local"), Some("k")),
             &mut script,
             || 0.0,
-            || panic!("성공 응답은 재시도하지 않는다"),
-        )
-        .unwrap();
-        assert_eq!(result.routing["backend"], "local");
-        assert_eq!(result.routing["model"], "jev-style-2b-decision-v3");
-        assert_eq!(result.answer["noul"], 0.9);
-        assert_eq!(script.calls.get(), 1);
+            || {
+                panic!("로컬은 호출하지 않는다");
+            },
+        );
+        assert_eq!(script.calls.get(), 0);
     }
 
     #[test]
-    fn local_leaves_option_limits_to_the_server_but_typesafe_checks_first() {
+    fn local_skips_the_typesafe_option_limit_but_typesafe_checks_first() {
         let mut options = Vec::new();
         for i in 0..256 {
             options.push(i.to_string());
@@ -252,11 +277,13 @@ mod tests {
             "instructions": "어느 쪽?",
             "options": options,
         });
-        let mut script = ok_script(
-            r#"{"model":"m","answers":{"q":{"type":"choice","choice":"0","probabilities":{"0":1.0}}}}"#,
-        );
-        decide(&raw, &env(Some("local"), None), &mut script, || 0.0, || {}).unwrap();
-        assert_eq!(script.calls.get(), 1);
+        let mut script = Script {
+            responses: vec![],
+            calls: Cell::new(0),
+        };
+        let err = decide(&raw, &env(Some("local"), None), &mut script, || 0.0, || {});
+        assert_ne!(err.unwrap_err(), typesafe::CHOICE_LIMIT);
+        assert_eq!(script.calls.get(), 0);
 
         let mut untouched = Script {
             responses: vec![],
@@ -272,25 +299,6 @@ mod tests {
         .unwrap_err();
         assert_eq!(err, typesafe::CHOICE_LIMIT);
         assert_eq!(untouched.calls.get(), 0);
-    }
-
-    #[test]
-    fn local_failure_names_local_and_does_not_fall_back() {
-        let mut script = Script {
-            responses: vec![Err("connection refused".into())],
-            calls: Cell::new(0),
-        };
-        let err = decide(
-            &noul(),
-            &env(Some("local"), Some("k")),
-            &mut script,
-            || 0.0,
-            || panic!("재시도하면 안 된다"),
-        )
-        .unwrap_err();
-        assert!(err.contains("로컬"), "{err}");
-        assert!(!err.contains("TypeSafe"), "{err}");
-        assert_eq!(script.calls.get(), 1);
     }
 
     #[test]
@@ -384,7 +392,7 @@ mod tests {
     }
 
     #[test]
-    fn many_typesafe_limit_names_the_question_but_local_passes_through() {
+    fn many_typesafe_limit_names_the_question_but_local_skips_it() {
         let options: Vec<String> = (0..256).map(|i| i.to_string()).collect();
         let raw = json!({
             "state": "s",
@@ -408,30 +416,35 @@ mod tests {
         assert_eq!(err, format!("질문 \"big\": {}", typesafe::CHOICE_LIMIT));
         assert_eq!(untouched.calls.get(), 0);
 
-        let mut script = ok_script(
-            r#"{"model":"m","answers":{"small":{"type":"noul","noul":0.5},"big":{"type":"choice","choice":"0"}}}"#,
+        // 로컬은 TypeSafe의 옵션 한도를 거치지 않는다 — 가중치 유무에 따라
+        // 성공/실패가 환경마다 다르므로 결과는 단정하지 않고, TypeSafe
+        // transport가 호출되지 않았다는 것만 확인한다.
+        let mut script = Script {
+            responses: vec![],
+            calls: Cell::new(0),
+        };
+        let err = decide_many(&raw, &env(Some("local"), None), &mut script, || 0.0, || {});
+        assert_ne!(
+            err.unwrap_err(),
+            format!("질문 \"big\": {}", typesafe::CHOICE_LIMIT)
         );
-        let result = decide_many(&raw, &env(Some("local"), None), &mut script, || 0.0, || {}).unwrap();
-        assert_eq!(script.calls.get(), 1);
-        assert_eq!(result.routing["backend"], "local");
+        assert_eq!(script.calls.get(), 0);
     }
 
     #[test]
-    fn many_fails_entirely_on_backend_error_or_missing_answer() {
-        let mut down = Script {
-            responses: vec![Err("connection refused".into())],
+    fn many_local_does_not_call_typesafe_and_typesafe_fails_entirely_on_missing_answer() {
+        let mut local_script = Script {
+            responses: vec![],
             calls: Cell::new(0),
         };
-        let err = decide_many(
+        let _ = decide_many(
             &many_raw(),
             &env(Some("local"), None),
-            &mut down,
+            &mut local_script,
             || 0.0,
             || panic!("재시도하면 안 된다"),
-        )
-        .unwrap_err();
-        assert!(err.contains("로컬"), "{err}");
-        assert_eq!(down.calls.get(), 1);
+        );
+        assert_eq!(local_script.calls.get(), 0);
 
         let mut partial = ok_script(
             r#"{"model":"m","answers":{"urgent":{"type":"noul","noul":0.8}}}"#,

@@ -10,10 +10,6 @@ use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
-pub const DEFAULT_URL: &str = "http://127.0.0.1:8765/v1/systemone";
-pub const CONNECT_HINT: &str = "jev-style serve가 실행 중인지 확인하세요";
-pub const NOT_READY: &str = "로컬 백엔드가 아직 준비되지 않았습니다";
-
 /// 백본 GGUF 파일명 — Task 7 fix round 2/5: Q4_K_M(4비트)에서 parity
 /// 질적 비교 중 5개 골든 입력 중 3개가 실제 Python 오라클(BF16)과 다른
 /// 결정을 내리는 것을 확인해(노이즈가 noul/작은 choice처럼 로짓이
@@ -21,14 +17,6 @@ pub const NOT_READY: &str = "로컬 백엔드가 아직 준비되지 않았습�
 /// Q6_K로 올렸다. 같은 `prithivMLmods/clef-flash-GGUF` 레포 안의 다른
 /// 파일일 뿐이라 레포 경로는 바뀌지 않는다.
 const BACKBONE_FILENAME: &str = "clef-flash.Q6_K.gguf";
-
-pub fn url() -> String {
-    std::env::var("DECIDE_LOCAL_URL")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| DEFAULT_URL.to_string())
-}
 
 fn clef_weights_is_set() -> bool {
     std::env::var("CLEF_WEIGHTS")

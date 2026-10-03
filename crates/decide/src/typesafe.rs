@@ -166,10 +166,6 @@ impl LiveTransport {
         Self::build(ENDPOINT, Some(key.to_string()))
     }
 
-    pub fn local(url: &str) -> Self {
-        Self::build(url, None)
-    }
-
     fn build(url: &str, key: Option<String>) -> Self {
         Self {
             agent: ureq::AgentBuilder::new()
@@ -201,7 +197,6 @@ impl Transport for LiveTransport {
                 status,
                 body: response.into_string().unwrap_or_default(),
             }),
-            Err(err) if self.key.is_none() => Err(format!("{err}. {}", crate::local::CONNECT_HINT)),
             Err(err) => Err(err.to_string()),
         }
     }
@@ -407,71 +402,6 @@ mod tests {
         .unwrap_err();
         assert!(err.contains("422"), "{err}");
         assert_eq!(invalid.calls.get(), 1);
-    }
-
-    fn serve_once(reply: &'static str) -> (String, std::thread::JoinHandle<String>) {
-        use std::io::{Read, Write};
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let url = format!("http://{}/v1/systemone", listener.local_addr().unwrap());
-        let handle = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            let mut request = Vec::new();
-            let mut chunk = [0u8; 4096];
-            loop {
-                let n = stream.read(&mut chunk).unwrap();
-                request.extend_from_slice(&chunk[..n]);
-                let text = String::from_utf8_lossy(&request).to_string();
-                if let Some(end) = text.find("\r\n\r\n") {
-                    let length = text
-                        .lines()
-                        .find_map(|l| {
-                            l.to_lowercase()
-                                .strip_prefix("content-length:")
-                                .map(|v| v.trim().parse::<usize>().unwrap())
-                        })
-                        .unwrap_or(0);
-                    if request.len() >= end + 4 + length {
-                        break;
-                    }
-                }
-                assert!(n > 0, "요청이 끝나기 전에 연결이 닫혔다");
-            }
-            let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                reply.len(),
-                reply
-            );
-            stream.write_all(response.as_bytes()).unwrap();
-            String::from_utf8_lossy(&request).to_string()
-        });
-        (url, handle)
-    }
-
-    #[test]
-    fn local_transport_posts_to_its_url_without_authorization() {
-        let (url, server) =
-            serve_once(r#"{"model":"m","answers":{"q":{"type":"noul","noul":0.5}}}"#);
-        let mut transport = LiveTransport::local(&url);
-        let raw = transport.post_json(&request_body("s", &noul())).unwrap();
-        assert_eq!(raw.status, 200);
-        let request = server.join().unwrap();
-        assert!(request.starts_with("POST /v1/systemone "), "{request}");
-        assert!(
-            !request.to_lowercase().contains("authorization"),
-            "{request}"
-        );
-    }
-
-    #[test]
-    fn local_connection_failure_points_at_jev_style_serve() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let url = format!("http://{}/v1/systemone", listener.local_addr().unwrap());
-        drop(listener);
-        let err = LiveTransport::local(&url)
-            .post_json(&request_body("s", &noul()))
-            .err()
-            .unwrap();
-        assert!(err.contains("jev-style serve"), "{err}");
     }
 
     fn many_questions() -> Vec<(String, Question)> {

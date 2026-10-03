@@ -275,21 +275,23 @@ mod tests {
         assert_eq!(parsed["routing"]["backend"], "typesafe");
         assert!(parsed["latency_ms"].is_number());
 
+        // 로컬 백엔드는 더 이상 HTTP transport(`script`)를 거치지 않고
+        // `local::infer`를 직접 호출한다 — 가중치 유무에 따라 성공/실패가
+        // 환경마다 다르므로 응답 모양은 단정하지 않고, transport가 추가로
+        // 호출되지 않았다는 것만 확인한다.
         let env = Env {
             backend: Some("local".into()),
             api_key: None,
         };
-        let local_line = handle_line(
+        let _ = handle_line(
             r#"{"state":"s","type":"noul","instructions":"참인가?"}"#,
             &env,
             &mut script,
             &mut cache,
         )
         .unwrap();
-        let parsed: Value = serde_json::from_str(&local_line).unwrap();
-        assert_eq!(parsed["routing"]["backend"], "local");
         assert!(handle_line("\n", &env, &mut script, &mut cache).is_none());
-        assert_eq!(script.calls.get(), 2);
+        assert_eq!(script.calls.get(), 1);
     }
 
     #[test]
