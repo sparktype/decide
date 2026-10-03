@@ -268,7 +268,11 @@ mod tests {
             0.25
         );
 
-        let response = handle_message(
+        // 로컬 백엔드는 더 이상 HTTP transport(`script`)를 거치지 않고
+        // `local::infer`를 직접 호출한다 — 가중치 유무에 따라 성공/실패가
+        // 환경마다 다르므로 그 결과(isError, structuredContent)는 단정하지
+        // 않고, transport가 추가로 호출되지 않았다는 것만 확인한다.
+        let _ = handle_message(
             &json!({
                 "jsonrpc": "2.0",
                 "id": 4,
@@ -280,14 +284,8 @@ mod tests {
             }),
             &env_local(),
             &mut script,
-        )
-        .unwrap();
-        assert_eq!(response["result"]["isError"], false);
-        assert_eq!(
-            response["result"]["structuredContent"]["routing"]["backend"],
-            "local"
         );
-        assert_eq!(script.calls.get(), 2);
+        assert_eq!(script.calls.get(), 1);
     }
 
     #[test]

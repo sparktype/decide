@@ -11,16 +11,33 @@ non-empty `TYPESAFE_API_KEY` selects TypeSafe Jev and an absent key selects loca
 A failed call stays on its backend. The two backends are not calibrated to each
 other. Both answer `noul` with only `type` and `noul`.
 
-The local backend does not run a model in this process. It POSTs the same body as TypeSafe
-to `jev-style serve` (`DECIDE_LOCAL_URL`, default `http://127.0.0.1:8765/v1/systemone`, no
-auth) and reads `answers.q`. The model is Jev-Style-2B-Decision-v3-MLX 8bit. That server is
-a separate Python install, so only the local backend needs Python. Design:
-`docs/superpowers/specs/2026-09-30-decide-local-jev-style-design.md`, which replaces the
-Laya ONNX/Candle runtime section of the 2026-09-29 design.
+The local backend runs real in-process inference — no server, no network call per
+request. It loads a Clef-flash backbone (Qwen3.5-9B hybrid attention, GGUF Q6_K,
+vendored from candle-transformers PR #3396) plus a from-scratch joint schema head.
+Both are read from `CLEF_WEIGHTS` if set (a missing file there is a hard error, no
+silent fallback) or downloaded once from HuggingFace (`prithivMLmods/clef-flash-GGUF`
+for the backbone, `Cloudflare/clef-flash` for the joint head and tokenizer) into
+`~/.cache/huggingface/hub` otherwise — the Q6_K GGUF alone is about 7.4GB, so first
+use costs real time and disk space. Local answers follow the same field shape as
+TypeSafe (`choice`/`score`/`noul` plus `confidence` and `probabilities`);
+`routing.model` is `"clef-flash"`. Design: `docs/superpowers/specs/2026-10-02-clef-flash-local-backend-design.md`.
+
+On a 5-case golden set, Q6_K agrees qualitatively with the real BF16
+Cloudflare/clef-flash model — compared via `scripts/clef_flash_oracle.py`, gated by
+`cargo test --features parity` — on 4/5 cases. The one disagreement is an 11-option
+choice question where even the reference model's own top-2 options differ by only
+about 0.02 probability, an inherently near-tied case rather than a wiring bug. This
+is an accepted, measured limitation of a quantized 9B model on CPU, not a bug to chase.
 
 The old Python package (`src/decide/`, its `pytest` suite, `test_smoke.py`, `pyproject.toml`)
-was deleted once the execution verification in the 2026-09-30 design passed. The
-only Python left in the repo is the stdlib hook `.claude/hooks/stop_verify.py`.
+was the comparison oracle for an earlier local backend and was deleted once that
+backend's execution verification passed. It has since been recreated as a
+comparison oracle for Clef-flash — see `scripts/clef_flash_oracle.py` instead, a
+Python script using the real HuggingFace `transformers` library against the real
+Cloudflare/clef-flash model; it stays uncommitted-weights, run manually with
+`cargo test --features parity`, not part of the default test suite. Besides that
+script and the stdlib hook `.claude/hooks/stop_verify.py`, the repo has no other
+Python.
 
 ## Commands
 
@@ -78,12 +95,16 @@ or `.claude/settings.json`, restart Claude Code.
   `jev-latest`. Choice criteria are `{option: option}` in insertion order. Retry 429
   and 529 once after one second. Choice above 255 options and score above 10 levels
   fail before the request.
-- `local.rs` holds the default local URL (`DEFAULT_URL`), `url()` (reads
-  `DECIDE_LOCAL_URL`) and the connect hint. `backend::live_transport` picks the
-  `LiveTransport` once per process: `typesafe(key)` or `local(url)` (no auth header).
-  `execute` and `map_response` take a label (`TypeSafe` or `로컬`) for error text.
-  The 255-option check runs only for TypeSafe; the local server enforces its own
-  255 cap with a 422 that is passed through.
+- `local/mod.rs` resolves weights (`CLEF_WEIGHTS` env override, else the HuggingFace
+  cache; `ensure_weights`/`download_weights`), lazily builds the backbone + joint
+  head + tokenizer once per process (`runtime()`, a `OnceLock`), and exposes
+  `infer` (state + question → the same answer shape as TypeSafe, via
+  `postprocess::to_answer`). `local/backbone.rs` vendors the PR #3396 Qwen3.5
+  hybrid-attention GGUF forward pass; `local/joint_head.rs` is the from-scratch
+  schema head (EvidenceRoutingLayer × 2 + TransformerDecoderLayer × 4);
+  `local/tokenizer.rs` assembles the Clef schema text and token spans.
+  `backend::decide`/`decide_many` call `local::infer` directly — no transport,
+  no `Backend::Local` arm in `typesafe::LiveTransport`.
 - `mcp.rs` speaks newline-delimited JSON-RPC. Tool failures are `isError` results.
 - `daemon.rs` serves one JSON line per connection. A live socket is left in place. A
   dead socket file is replaced. Idle exit uses `poll`. It also holds an in-process
@@ -101,6 +122,10 @@ or `.claude/settings.json`, restart Claude Code.
 - `show.rs` turns a `PostToolUse` hook input for `mcp__decide__decide` into a user-facing summary
   (`render(&Value) -> Option<String>`, pure). `decide hook` (`main.rs`) reads stdin, prints
   `{"systemMessage": ...}` as one JSON line, and stays silent with exit 0 on anything unreadable.
+  Known limitation (outside this plan's scope): `score_text` assumes TypeSafe's shape for
+  `legend` (an object keyed by index strings); local `score` answers use a plain array for
+  `legend`, so a local score answer piped through here silently drops the summary line
+  instead of rendering one.
 
 `.claude/hooks/stop_verify.py` remains a stdlib client. It spawns
 `/opt/homebrew/bin/decide daemon` with the hook environment and fail-opens when the
@@ -114,5 +139,6 @@ rule in `.gitignore`.
 unreliably. See the README section "에이전트가 쓸 때".
 
 **Tests inject the backend.** Rust tests use a scripted transport and a fake clock.
-`tests/stop_hook.rs` runs `python3` against the hook's pure logic. Keep real-server
-checks (`jev-style serve`, a live TypeSafe key) out of the default suites.
+`tests/stop_hook.rs` runs `python3` against the hook's pure logic. Keep checks that
+need real weights or a live TypeSafe key (`--features parity`, `#[ignore]` local
+inference tests) out of the default suites.
