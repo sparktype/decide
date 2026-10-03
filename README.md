@@ -9,12 +9,12 @@
 | `DECIDE_BACKEND` | 동작 |
 | --- | --- |
 | `typesafe` | `TYPESAFE_API_KEY`로 [TypeSafe.ai](https://api.typesafe.ai) Jev를 호출한다. 키가 비어 있으면 오류다. |
-| `local` | 내 Mac에서 도는 `jev-style serve`만 호출한다. 키는 읽지 않는다. |
+| `local` | 내 Mac에서 Clef-flash를 직접 돌린다. 서버도, 키도 필요 없다. |
 | 없음 | 키가 있으면 TypeSafe, 없으면 로컬이다. |
 
 한 요청은 고른 백엔드에서만 끝난다. 429 또는 529를 받으면 그 요청만 1초 뒤에 한 번 더 보낸다. 401, 422, 연결 실패는 그 호출의 오류다. 두 백엔드의 확률을 서로 같은 값으로 맞추지는 않는다.
 
-로컬 백엔드는 [Jev-Style-2B-Decision-v3](https://huggingface.co/chaoliangUNSW/Jev-Style-2B-Decision-v3-MLX)(MLX 8bit, 약 2GB, Apache-2.0)를 쓴다. `decide`가 모델을 직접 돌리지 않고, 따로 띄운 `jev-style serve`의 `/v1/systemone`을 호출한다. 그래서 로컬 백엔드에는 Python 서버가 필요하다. TypeSafe 백엔드는 필요 없다. 설정은 아래 "로컬 백엔드"를 본다.
+로컬 백엔드는 Cloudflare의 Clef-flash(Qwen3.5-9B 하이브리드 백본, GGUF Q6_K, candle-transformers PR #3396에서 벤더링)와 자체 구현한 joint schema head를 같은 프로세스 안에서 직접 돌린다. 따로 띄우는 서버가 없다. 설정은 아래 "로컬 백엔드"를 본다.
 
 ## 붙이기
 
@@ -51,38 +51,14 @@ decide install
 
 ## 로컬 백엔드
 
-키가 없거나 `DECIDE_BACKEND=local`이면 `decide`는 `http://127.0.0.1:8765/v1/systemone`을 부른다. 그 주소에서 서버가 떠 있어야 한다. Apple Silicon Mac 전용이다(MLX).
+키가 없거나 `DECIDE_BACKEND=local`이면 `decide`는 Clef-flash를 그 프로세스 안에서 직접 돌린다. 띄워 둬야 할 서버가 없다.
 
-```bash
-# 한 번만. Python 3.12 가상환경에 설치한다. mlx-lm 0.31.3이 함께 고정돼 깔린다.
-uv venv jv --python 3.12
-uv pip install --python jv/bin/python "jev-style[mlx]"
+가중치는 두 파일이다: 백본 GGUF(`clef-flash.Q6_K.gguf`, 약 7.4GB)와 joint head(`joint_head.safetensors`).
 
-# 서버를 띄운다. 첫 실행은 가중치(약 2GB)를 받는다.
-jv/bin/jev-style serve --release 2b --precision 8bit
-```
-
-- 서버는 `127.0.0.1:8765`에만 열리고 인증이 없다. 모델 로딩에 몇 초 걸리니 뜬 뒤에 호출한다.
-- `HF_HUB_OFFLINE=1`인 환경이면 첫 실행에서 가중치를 받지 못한다. 그 명령에서만 `HF_HUB_OFFLINE=0`으로 실행해 미리 받아 둔다.
-- 다른 주소를 쓰려면 `decide`를 띄우는 환경에 `DECIDE_LOCAL_URL`을 넣는다.
-- 서버가 없으면 호출은 `로컬 연결에 실패했습니다: …. jev-style serve가 실행 중인지 확인하세요`라는 도구 오류로 끝난다. TypeSafe로 넘어가지 않는다.
-- 실측 지연은 첫 호출 약 1.7초, 이후 호출당 약 50~140ms다(M 시리즈 Mac, 짧은 입력).
-
-### 로그인 때 자동으로 띄우기 (선택)
-
-서버를 매번 손으로 띄우기 싫으면 LaunchAgent로 등록할 수 있다. 템플릿은 `packaging/launchd/dev.sparktype.decide-local.plist`다. 서버를 홈 아래 고정 경로의 가상환경에 설치하고(템플릿이 그 경로를 쓴다), `__HOME__`을 채워 `~/Library/LaunchAgents/`에 둔다. 가중치를 미리 받아 둔 상태여야 한다. 템플릿은 `HF_HUB_OFFLINE=1`로 돈다.
-
-```bash
-uv venv ~/.local/share/decide/jev-style --python 3.12
-uv pip install --python ~/.local/share/decide/jev-style/bin/python "jev-style[mlx]"
-sed "s|__HOME__|$HOME|g" packaging/launchd/dev.sparktype.decide-local.plist \
-  > ~/Library/LaunchAgents/dev.sparktype.decide-local.plist
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.sparktype.decide-local.plist
-```
-
-끄려면 `launchctl bootout gui/$(id -u)/dev.sparktype.decide-local`을 실행하고 plist를 지운다. 로그는 `~/Library/Logs/decide-local.log`다. 모델을 메모리에 올린 채 상주하므로 메모리를 쓴다(사용량은 재 보지 않았다). 이 템플릿은 문법만 검사했고 실제 기동은 검증하지 않았다.
-
-로컬 답은 TypeSafe 답과 같은 모양이다(`choice`/`score`/`noul`, choice·score의 `probabilities`와 `confidence`, score의 `legend`). 한국어 state도 받는다. 다만 한국어는 8문항 스모크 테스트로만 확인했고 정확도는 재지 않았다. 중요한 판단이면 `probabilities`를 보고 직접 확인한다.
+- `CLEF_WEIGHTS`에 디렉터리를 넣으면 그 안에서 두 파일을 찾는다. 하나라도 없으면 다운로드로 넘어가지 않고 그대로 오류다.
+- `CLEF_WEIGHTS`가 없으면 처음 쓸 때 HuggingFace에서 받아 `~/.cache/huggingface/hub`에 둔다(백본은 `prithivMLmods/clef-flash-GGUF`, joint head와 토크나이저는 `Cloudflare/clef-flash`에서). 첫 호출은 그만큼 시간과 디스크를 쓴다.
+- 로컬 답은 TypeSafe 답과 같은 모양이다(`choice`/`score`/`noul`, choice·score의 `probabilities`와 `confidence`, score의 `legend`). `routing.model`은 `"clef-flash"`다.
+- 5개 골든 케이스로 BF16 Python 오라클(`scripts/clef_flash_oracle.py`, `cargo test --features parity`)과 대조한 결과 4/5가 질적으로 일치한다. 어긋난 1개는 선택지가 11개인 choice 질문으로, 오라클 자체도 1·2위 확률 차이가 0.02 안쪽인 거의 동률 사례다 — 양자화 버그가 아니라 9B 모델을 CPU에서 4~6비트로 돌리는 데 따르는, 측정되고 받아들인 한계다. 중요한 판단이면 `probabilities`를 보고 직접 확인한다.
 
 ## 사용법
 
@@ -100,8 +76,8 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.sparktype.decide-loc
 
 | 백엔드 | `choice` 옵션 | `score` 등급 |
 | --- | --- | --- |
-| TypeSafe | 255개까지 | 10개까지. 넘으면 호출 전에 오류가 난다. |
-| 로컬 | 255개까지. 넘으면 서버가 422로 거절하고 그 메시지가 그대로 돌아온다. | 상한을 확인하지 못했다. |
+| TypeSafe | 255개까지. 넘으면 호출 전에 오류가 난다. | 10개까지. 넘으면 호출 전에 오류가 난다. |
+| 로컬 | 코드에 별도 상한은 없다. 모델의 컨텍스트 길이 안에서만 제한된다. | 코드에 별도 상한은 없다. |
 
 ```text
 decide(state="서버가 다운됐습니다", instructions="이 요청이 긴급한가?", type="noul")
@@ -132,18 +108,18 @@ decide_many(
 )
 ```
 
-반환은 `answers`(질문 id → 답, 입력 순서), `routing`, `latency_ms`다. 하나라도 검증에 실패하거나 백엔드가 실패하면 전체가 도구 오류이고 부분 결과는 없다. 검증 오류 앞에는 `질문 "<id>": `가 붙는다. 질문 개수 상한은 두지 않고 백엔드가 거절하는 대로 돌려준다. 로컬 서버에서는 질문 수에 비례해 시간이 든다(질문당 약 45ms. 같은 질문 3개를 한 번에 보낸 134ms와 따로 보낸 139ms가 사실상 같았다). 이점은 모델 지연이 아니라 에이전트의 도구 호출 횟수가 줄어드는 것이다.
+반환은 `answers`(질문 id → 답, 입력 순서), `routing`, `latency_ms`다. 하나라도 검증에 실패하거나 백엔드가 실패하면 전체가 도구 오류이고 부분 결과는 없다. 검증 오류 앞에는 `질문 "<id>": `가 붙는다. 질문 개수 상한은 두지 않고 백엔드가 거절하는 대로 돌려준다. 로컬 백엔드는 질문마다 추론을 다시 돌리므로 질문 수에 비례해 시간이 든다. 이점은 모델 지연이 아니라 에이전트의 도구 호출 횟수가 줄어드는 것이다.
 
 질문 하나하나는 yes/no나 단일 선택처럼 작게 쪼갠다. 복합 질문은 정확도가 떨어진다. 앞 답에 따라 뒤 질문을 정해야 하면 호출을 나눈다. `decide daemon` 소켓도 줄에 `questions`가 있으면 같은 모양으로 답한다(`type`과 함께 줄 수 없다).
 
 ### 에이전트가 쓸 때
 
 - **언제 부르나.** 답이 선택지·등급·확률로 고정되는 판단 한 건일 때 부른다. 서술, 요약, 계획처럼 글을 만들어야 하는 일에는 쓰지 않는다.
-- **실패하면.** 그 오류로 작업을 멈추지 않고 직접 추론해서 계속한다. 검증 오류와 백엔드 오류는 도구 오류로 돌아오고, 서버 세션은 유지된다. 로컬 연결 실패는 `jev-style serve`가 안 떠 있다는 뜻이니 사용자에게 한 줄로 알린다.
+- **실패하면.** 그 오류로 작업을 멈추지 않고 직접 추론해서 계속한다. 검증 오류와 백엔드 오류는 도구 오류로 돌아온다. 로컬 백엔드의 실패는 보통 가중치 다운로드·로드 오류이니 사용자에게 한 줄로 알린다.
 - **어느 백엔드가 답했나.** `routing.backend`를 본다. 같은 질문이라도 TypeSafe와 로컬의 확률은 보정이 달라 섞어서 비교하지 않는다.
 - **임계값.** `noul`을 조건으로 쓸 때 기준은 부르는 쪽이 정한다. 경계 근처(0.3~0.7)면 한 번 더 확인한다.
 
-키는 환경 변수 `TYPESAFE_API_KEY`로만 읽는다. TypeSafe 호출 주소는 `https://api.typesafe.ai/v1/systemone`이고, 요청의 `model`은 `jev-latest`다. 로컬 호출은 같은 본문을 인증 헤더 없이 보낸다.
+키는 환경 변수 `TYPESAFE_API_KEY`로만 읽는다. TypeSafe 호출 주소는 `https://api.typesafe.ai/v1/systemone`이고, 요청의 `model`은 `jev-latest`다. 로컬 백엔드는 네트워크 호출이 아니라 같은 프로세스 안의 추론이다.
 
 ## decide가 고른 것을 눈으로 보기
 
@@ -191,8 +167,8 @@ decide install --claude
 cargo test --manifest-path crates/decide/Cargo.toml
 ```
 
-이전 Python 패키지는 실행 검증(`cargo test`, TypeSafe 호출, 로컬 호출, 데몬 소켓)이 끝나 지웠다. 저장소에 남은 Python은 표준 라이브러리만 쓰는 Stop 훅 하나다. 테스트 명령은 `cargo test`뿐이다. 실서버(`jev-style serve`, TypeSafe 키)를 쓰는 확인은 기본 테스트에 넣지 않는다.
+이전 Python 패키지(Jev-Style 서버 호출 방식의 비교용)는 그 백엔드의 실행 검증이 끝나 지웠다. Clef-flash의 비교 오라클은 `scripts/clef_flash_oracle.py`(Python `transformers`, 실행에 가중치가 필요해 기본 테스트에 넣지 않는다)이고, `cargo test --features parity`로 돈다. 기본 테스트 명령은 `cargo test`뿐이다. 저장소에 남은 Python은 그 오라클 스크립트와 표준 라이브러리만 쓰는 Stop 훅이다.
 
-Stop 훅 `.claude/hooks/stop_verify.py`는 소켓이 없으면 `/opt/homebrew/bin/decide daemon`을 백그라운드로 띄우고, 그 호출은 통과시킨다. 백엔드가 로컬인데 `jev-style serve`가 없으면 데몬 호출이 오류가 되고, 훅은 그 오류를 통과로 처리한다. 두 백엔드의 확률은 보정이 달라서, 백엔드를 바꾸면 임계값이 여전히 맞는지 확인한다. 노울 신뢰도 임계값(기본 0.4)은 `DECIDE_STOP_THRESHOLD` 환경 변수로 바꿀 수 있다.
+Stop 훅 `.claude/hooks/stop_verify.py`는 소켓이 없으면 `/opt/homebrew/bin/decide daemon`을 백그라운드로 띄우고, 그 호출은 통과시킨다. 로컬 백엔드가 가중치 다운로드·로드에 실패하면 데몬 호출이 오류가 되고, 훅은 그 오류를 통과로 처리한다. 두 백엔드의 확률은 보정이 달라서, 백엔드를 바꾸면 임계값이 여전히 맞는지 확인한다. 노울 신뢰도 임계값(기본 0.4)은 `DECIDE_STOP_THRESHOLD` 환경 변수로 바꿀 수 있다.
 
-설계는 `docs/superpowers/specs/2026-09-29-decide-rust-runtime-design.md`에 있다. 로컬 백엔드는 그 문서의 로컬 런타임 절을 대체하는 `docs/superpowers/specs/2026-09-30-decide-local-jev-style-design.md`를 따른다.
+설계는 `docs/superpowers/specs/2026-09-29-decide-rust-runtime-design.md`에 있다. 로컬 백엔드는 `docs/superpowers/specs/2026-10-02-clef-flash-local-backend-design.md`를 따른다.
