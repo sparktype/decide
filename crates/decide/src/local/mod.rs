@@ -14,6 +14,14 @@ pub const DEFAULT_URL: &str = "http://127.0.0.1:8765/v1/systemone";
 pub const CONNECT_HINT: &str = "jev-style serve가 실행 중인지 확인하세요";
 pub const NOT_READY: &str = "로컬 백엔드가 아직 준비되지 않았습니다";
 
+/// 백본 GGUF 파일명 — Task 7 fix round 2/5: Q4_K_M(4비트)에서 parity
+/// 질적 비교 중 5개 골든 입력 중 3개가 실제 Python 오라클(BF16)과 다른
+/// 결정을 내리는 것을 확인해(노이즈가 noul/작은 choice처럼 로짓이
+/// 몰려 있는 질문의 결정 자체를 바꿀 만큼 컸다), 더 높은 정밀도인
+/// Q6_K로 올렸다. 같은 `prithivMLmods/clef-flash-GGUF` 레포 안의 다른
+/// 파일일 뿐이라 레포 경로는 바뀌지 않는다.
+const BACKBONE_FILENAME: &str = "clef-flash.Q6_K.gguf";
+
 pub fn url() -> String {
     std::env::var("DECIDE_LOCAL_URL")
         .ok()
@@ -126,14 +134,14 @@ enum WeightsDecision {
 }
 
 fn resolve_weights(dir: &std::path::Path) -> WeightsDecision {
-    let backbone_path = dir.join("clef-flash.Q4_K_M.gguf");
+    let backbone_path = dir.join(BACKBONE_FILENAME);
     let head_path = dir.join("joint_head.safetensors");
     if backbone_path.exists() && head_path.exists() {
         return WeightsDecision::Found(backbone_path, head_path);
     }
     if clef_weights_is_set() {
         return WeightsDecision::HardError(format!(
-            "CLEF_WEIGHTS={}에서 가중치 파일을 찾을 수 없습니다 (clef-flash.Q4_K_M.gguf, joint_head.safetensors 필요)",
+            "CLEF_WEIGHTS={}에서 가중치 파일을 찾을 수 없습니다 ({BACKBONE_FILENAME}, joint_head.safetensors 필요)",
             dir.display()
         ));
     }
@@ -156,9 +164,9 @@ fn download_weights(dir: &std::path::Path) -> Result<(PathBuf, PathBuf), String>
 
     let backbone_repo = api.model("prithivMLmods/clef-flash-GGUF".to_string());
     let backbone_src = backbone_repo
-        .get("clef-flash.Q4_K_M.gguf")
+        .get(BACKBONE_FILENAME)
         .map_err(|err| format!("백본 GGUF 다운로드에 실패했습니다: {err}"))?;
-    let backbone_dst = dir.join("clef-flash.Q4_K_M.gguf");
+    let backbone_dst = dir.join(BACKBONE_FILENAME);
     std::fs::copy(&backbone_src, &backbone_dst).map_err(|err| format!("백본 파일 복사에 실패했습니다: {err}"))?;
 
     let head_repo = api.model("Cloudflare/clef-flash".to_string());
@@ -261,12 +269,12 @@ mod tests {
     fn ensure_weights_finds_files_in_clef_weights_dir() {
         let dir = std::env::temp_dir().join(format!("clef-weights-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("clef-flash.Q4_K_M.gguf"), b"fake").unwrap();
+        std::fs::write(dir.join(BACKBONE_FILENAME), b"fake").unwrap();
         std::fs::write(dir.join("joint_head.safetensors"), b"fake").unwrap();
         std::env::set_var("CLEF_WEIGHTS", &dir);
 
         let (backbone_path, head_path) = ensure_weights().unwrap();
-        assert_eq!(backbone_path, dir.join("clef-flash.Q4_K_M.gguf"));
+        assert_eq!(backbone_path, dir.join(BACKBONE_FILENAME));
         assert_eq!(head_path, dir.join("joint_head.safetensors"));
 
         std::env::remove_var("CLEF_WEIGHTS");
