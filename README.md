@@ -24,7 +24,7 @@ Apple Silicon Mac에서는 탭으로 깐다.
 brew install sparktype/tap/decide
 ```
 
-버전은 0.3.0다. 바이너리는 `/opt/homebrew/bin/decide`다. formula는 GitHub Release에 올라간 사전 빌드 arm64 바이너리를 받아 그대로 설치한다 — 설치에 Rust 툴체인이 필요 없다. 가중치와 API 키는 병 밖에 둔다.
+버전은 0.4.0다. 바이너리는 `/opt/homebrew/bin/decide`다. formula는 GitHub Release에 올라간 사전 빌드 arm64 바이너리를 받아 그대로 설치한다 — 설치에 Rust 툴체인이 필요 없다. 가중치와 API 키는 병 밖에 둔다.
 
 ```bash
 decide install
@@ -47,7 +47,7 @@ decide install
 
 `decide mcp`가 stdio MCP다. `decide daemon`은 `~/.cache/decide/decide.sock`에서 JSON 한 줄을 받고, 30분 동안 요청이 없으면 끝난다.
 
-명령줄은 관행을 따른다. `decide --version`(`-V`)은 `decide 0.3.0`처럼 버전 한 줄을 내고, `decide --help`(`-h`)와 인자 없는 `decide`는 전체 도움말을, `decide <명령> --help`와 `decide help <명령>`은 그 명령의 도움말을 낸다. 도움말과 버전은 stdout에 쓰고 종료 코드 0이다. 알 수 없는 명령이나 잘못된 인자는 stderr에 이유를 쓰고 종료 코드 2다. 도움말 옵션은 서버를 띄우는 `mcp`와 `daemon`에서도 서버를 시작하지 않는다.
+명령줄은 관행을 따른다. `decide --version`(`-V`)은 `decide 0.4.0`처럼 버전 한 줄을 내고, `decide --help`(`-h`)와 인자 없는 `decide`는 전체 도움말을, `decide <명령> --help`와 `decide help <명령>`은 그 명령의 도움말을 낸다. 도움말과 버전은 stdout에 쓰고 종료 코드 0이다. 알 수 없는 명령이나 잘못된 인자는 stderr에 이유를 쓰고 종료 코드 2다. 도움말 옵션은 서버를 띄우는 `mcp`와 `daemon`에서도 서버를 시작하지 않는다.
 
 도구를 언제 부르고 언제 직접 추론할지는 아래 "에이전트가 쓸 때"를 따른다. 스킬 파일 `.claude/skills/decide/SKILL.md`는 `.gitignore` 대상이라 이 저장소에 포함되지 않는다.
 
