@@ -51,7 +51,7 @@ fn result_json(response: &Value) -> Option<Value> {
     found.filter(|value| value.get("answer").is_some())
 }
 
-fn truncate(question: &str) -> String {
+pub(crate) fn truncate(question: &str) -> String {
     if question.chars().count() <= QUESTION_MAX_CHARS {
         return question.to_string();
     }
@@ -59,7 +59,7 @@ fn truncate(question: &str) -> String {
     format!("{head}…")
 }
 
-fn pct(probability: f64) -> i64 {
+pub(crate) fn pct(probability: f64) -> i64 {
     (probability * 100.0).round() as i64
 }
 
@@ -92,20 +92,25 @@ fn choice_text(answer: &Value, question: &str) -> Option<String> {
 fn score_text(answer: &Value, question: &str) -> Option<String> {
     let score = answer.get("score")?.as_f64()?;
     let probabilities = answer.get("probabilities")?.as_object()?;
-    let legend = answer.get("legend")?.as_object()?;
+    let legend = answer.get("legend")?;
     let (top_key, top_probability) = probabilities
         .iter()
         .filter_map(|(key, value)| Some((key.as_str(), value.as_f64()?)))
         .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal))?;
-    let label = legend.get(top_key)?.as_str()?;
-    let max = legend.len().saturating_sub(1);
+    // TypeSafe는 인덱스 문자열을 키로 하는 객체, 로컬은 같은 순서의 배열로 legend를 돌려준다.
+    let (label, levels) = match legend {
+        Value::Object(map) => (map.get(top_key)?.as_str()?, map.len()),
+        Value::Array(items) => (items.get(top_key.parse::<usize>().ok()?)?.as_str()?, items.len()),
+        _ => return None,
+    };
+    let max = levels.saturating_sub(1);
     Some(format!(
         "🔎 decide 점수: {question} → 기대값 {score:.2}/{max}, 가장 가능성 높은 등급 \"{label}\" {}%",
         pct(top_probability)
     ))
 }
 
-fn footer(result: &Value) -> String {
+pub(crate) fn footer(result: &Value) -> String {
     let routing = result.get("routing");
     let field = |key: &str| {
         routing
@@ -152,6 +157,15 @@ mod tests {
 
     fn text(raw: &str) -> Value {
         Value::String(raw.to_string())
+    }
+
+    #[test]
+    fn renders_a_local_score_answer_whose_legend_is_an_array() {
+        let local = r#"{"answer":{"type":"score","score":0.8,"confidence":0.8,"legend":["낮음","높음"],"probabilities":{"0":0.2,"1":0.8}},"routing":{"backend":"local","model":"clef-flash"},"latency_ms":12.4}"#;
+        assert_eq!(
+            render(&hook_input("q", text(local))).unwrap(),
+            "🔎 decide 점수: q → 기대값 0.80/1, 가장 가능성 높은 등급 \"높음\" 80%\n   local · clef-flash · 12ms"
+        );
     }
 
     #[test]

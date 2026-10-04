@@ -52,6 +52,7 @@ fn main() {
             reject_extra(args.next());
             run_hook();
         }
+        Some("gate") => run_gate(args.collect()),
         Some(other) => {
             eprintln!("알 수 없는 명령입니다: {other}");
             std::process::exit(2);
@@ -72,6 +73,80 @@ fn run_hook() {
     }
 }
 
+/// `decide gate <이름>`(stdin 훅 입력 → 훅 출력 JSON)과 `decide gate --show [이름] [--json]`.
+fn run_gate(args: Vec<String>) {
+    match args.first().map(String::as_str) {
+        Some("--show") => run_gate_show(&args[1..]),
+        Some(name) if !name.starts_with('-') && args.len() == 1 => {
+            if name != decide::gate::config::BASH_RISK {
+                eprintln!("알 수 없는 게이트입니다: {name}");
+                std::process::exit(1);
+            }
+            let mut input = String::new();
+            if io::stdin().read_to_string(&mut input).is_err() {
+                return;
+            }
+            let ctx = gate_context();
+            let mut spawn = || {
+                let _ = decide::gate::client::spawn_daemon();
+            };
+            if let Some(output) = decide::gate::run_hook(name, &input, &ctx, &mut spawn) {
+                println!("{output}");
+            }
+        }
+        _ => {
+            eprintln!("사용법: decide gate <이름> | decide gate --show [이름] [--json]");
+            std::process::exit(2);
+        }
+    }
+}
+
+fn gate_context() -> decide::gate::Context {
+    decide::gate::Context {
+        home: std::env::var("HOME").ok(),
+        socket: daemon::default_socket_path(),
+        client_version: daemon::VERSION.to_string(),
+        fallback_cwd: std::env::current_dir().unwrap_or_else(|_| ".".into()),
+    }
+}
+
+fn run_gate_show(args: &[String]) {
+    use decide::gate::{config, output};
+    let json = args.iter().any(|arg| arg == "--json");
+    let names: Vec<&String> = args.iter().filter(|arg| !arg.starts_with("--")).collect();
+    if args.iter().any(|arg| arg.starts_with("--") && arg != "--json") || names.len() > 1 {
+        eprintln!("사용법: decide gate --show [이름] [--json]");
+        std::process::exit(2);
+    }
+    let ctx = gate_context();
+    let loaded = config::load_from_disk(ctx.home.as_deref(), &ctx.fallback_cwd);
+    match names.first() {
+        Some(name) => match output::show_gate(&loaded, name, json) {
+            Some(text) => println!("{text}"),
+            None => {
+                eprintln!("알 수 없는 게이트입니다: {name}");
+                std::process::exit(2);
+            }
+        },
+        None if json => {
+            eprintln!("--json은 게이트 이름과 함께 써야 합니다: decide gate --show bash-risk --json");
+            std::process::exit(2);
+        }
+        None => {
+            let (user_path, repo_path) = config::config_paths(ctx.home.as_deref(), &ctx.fallback_cwd);
+            let user = output::Location {
+                label: "~/.config/decide/gates.json".to_string(),
+                exists: user_path.is_some_and(|path| path.exists()),
+            };
+            let repo = output::Location {
+                label: "./.decide/gates.json".to_string(),
+                exists: repo_path.exists(),
+            };
+            println!("{}", output::show_overview(&loaded, &user, &repo));
+        }
+    }
+}
+
 fn reject_extra(extra: Option<String>) {
     if extra.is_some() {
         eprintln!("인자가 너무 많습니다");
@@ -82,14 +157,18 @@ fn reject_extra(extra: Option<String>) {
 fn print_help() {
     println!(
         "\
-decide [mcp|daemon|install [--claude]|hook]
+decide [mcp|daemon|install [--claude]|hook|gate]
 
 인자 없이 실행하면 이 도움말이다.
   mcp      stdio MCP
   daemon   ~/.cache/decide/decide.sock
   install  claude mcp add로 Claude Code 사용자 스코프에 decide를 등록한다
-           --claude  MCP 등록에 더해 표시 훅(PostToolUse)도 Claude Code 사용자 설정에 넣는다
+           --claude  MCP 등록에 더해 표시 훅(PostToolUse)과 bash-risk 게이트 훅(PreToolUse, Bash)도
+                     Claude Code 사용자 설정에 넣는다. 게이트는 기본이 감사 모드라 막지 않는다
   hook     Claude Code PostToolUse 훅. decide 결과를 사용자에게 한 줄로 보여준다
+  gate     Claude Code 훅(PreToolUse)에서 decide로 판정한다
+           gate <이름>              stdin의 훅 입력을 판정해 훅 출력 JSON을 낸다(이름: bash-risk)
+           gate --show [이름] [--json]  게이트 목록, 또는 질문·임계값·출처를 보여준다
 
 DECIDE_BACKEND=typesafe|local
 TYPESAFE_API_KEY가 있고 백엔드를 지정하지 않으면 TypeSafe Jev를 호출한다."
@@ -129,9 +208,10 @@ fn run_install() -> io::Result<()> {
 fn run_install_claude() -> io::Result<()> {
     run_install()?;
     let path = claude::settings_path().map_err(io::Error::other)?;
-    let command = claude::hook_command(DECIDE_BIN);
-    match claude::install_hook(&path, &command).map_err(io::Error::other)? {
-        Installed::Added => println!("훅을 등록했습니다: {}", path.display()),
+    let display = claude::hook_command(DECIDE_BIN);
+    let gate = claude::gate_command(DECIDE_BIN);
+    match claude::install_hooks(&path, &claude::hook_specs(&display, &gate)).map_err(io::Error::other)? {
+        Installed::Added => println!("훅을 등록했습니다(결과 표시, bash-risk 게이트): {}", path.display()),
         Installed::AlreadyPresent => println!("훅이 이미 등록돼 있습니다: {}", path.display()),
     }
     Ok(())

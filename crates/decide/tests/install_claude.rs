@@ -1,10 +1,11 @@
-// decide install --claude가 MCP 등록에 이어 표시 훅을 설정에 안전하게 넣는지 검사한다
+// decide install --claude가 MCP 등록에 이어 표시 훅과 bash-risk 게이트 훅을 설정에 안전하게 넣는지 검사한다
 use serde_json::{json, Value};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 const COMMAND: &str = "/opt/homebrew/bin/decide hook";
+const GATE_COMMAND: &str = "/opt/homebrew/bin/decide gate bash-risk";
 
 fn temp_dir(label: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
@@ -49,8 +50,15 @@ fn our_group() -> Value {
     })
 }
 
+fn gate_group() -> Value {
+    json!({
+        "matcher": "Bash",
+        "hooks": [{"type": "command", "command": GATE_COMMAND, "timeout": 10}]
+    })
+}
+
 #[test]
-fn claude_flag_registers_the_mcp_server_then_adds_the_hook() {
+fn claude_flag_registers_the_mcp_server_then_adds_the_hooks() {
     let dir = temp_dir("fresh");
     let log = dir.join("claude-args.log");
     let bin = fake_claude(
@@ -62,7 +70,10 @@ fn claude_flag_registers_the_mcp_server_then_adds_the_hook() {
     let args = std::fs::read_to_string(&log).unwrap();
     assert!(args.contains("mcp add -s user decide"), "{args}");
     let settings = dir.join(".claude").join("settings.json");
-    assert_eq!(read_json(&settings), json!({"hooks": {"PostToolUse": [our_group()]}}));
+    assert_eq!(
+        read_json(&settings),
+        json!({"hooks": {"PostToolUse": [our_group()], "PreToolUse": [gate_group()]}})
+    );
     assert!(String::from_utf8_lossy(&output.stdout).contains("훅을 등록했습니다"));
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -97,10 +108,30 @@ fn existing_settings_are_preserved_and_backed_up() {
     assert_eq!(groups.len(), 2);
     assert_eq!(groups[0]["matcher"], "Bash");
     assert_eq!(groups[1], our_group());
+    assert_eq!(settings["hooks"]["PreToolUse"], json!([gate_group()]));
     assert_eq!(
         std::fs::read_to_string(config.join("settings.json.bak-decide")).unwrap(),
         original
     );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_display_hook_installed_by_an_older_version_gets_only_the_gate_added() {
+    let dir = temp_dir("upgrade");
+    let bin = fake_claude(&dir, "#!/bin/sh\nexit 0\n");
+    let config = dir.join(".claude");
+    std::fs::create_dir_all(&config).unwrap();
+    let older = json!({"hooks": {"PostToolUse": [our_group()]}});
+    std::fs::write(config.join("settings.json"), serde_json::to_string_pretty(&older).unwrap()).unwrap();
+    let output = run(&["install", "--claude"], &dir, &bin);
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(
+        read_json(&config.join("settings.json")),
+        json!({"hooks": {"PostToolUse": [our_group()], "PreToolUse": [gate_group()]}}),
+        "표시 훅은 한 번만 있고 게이트가 추가돼야 한다"
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("훅을 등록했습니다"));
     let _ = std::fs::remove_dir_all(&dir);
 }
 

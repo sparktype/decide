@@ -1,0 +1,20 @@
+# decide gate 체크리스트
+
+- [x] 설계서 작성 (`docs/superpowers/specs/2026-10-04-decide-gate-design.md`)
+- [x] 기본값 확정(설정 경로, display=decisions, enforce는 수동 전환, 첫 게이트 bash-risk)
+- [x] 설계서의 감사 모드 모순 정정(감사 모드는 permissionDecision을 내지 않음)
+- [x] 구현 계획 작성
+- [x] 0. 로컬 빌드 환경 복구(Xcode 27 설치, Metal Toolchain 재설치로 해결)
+- [x] 1. `claude.rs` 훅 설치를 이벤트·matcher 인자로 일반화(`HookSpec`, `add_hook_spec`, `install_hooks`)
+- [x] 2. 데몬 `client_version` 확인과 stale 종료(`handle_request`, `VERSION`)
+- [x] 3. 게이트 설정(내장 기본값, 층 병합, 출처 추적, 파일 읽기: `gate/config.rs`)
+- [x] 4. bash-risk 순수 로직(가리기, state, 사전 필터, 판정)
+- [x] 5. 출력(훅 JSON, 근거 표시 문구, 실패 시 통과) + show.rs legend 배열 수정(`gate/output.rs`, show.rs legend 배열 지원 포함)
+- [x] 6. 클라이언트(소켓, 데몬 띄우기, stale, 감사 로그)(`gate/client.rs`)
+- [x] 7. CLI 연결(`gate <이름>`, `gate --show [이름] [--json]`)(`gate::run_hook`, `decide gate`, `--show`, `tests/gate.rs`)
+- [x] 8. `decide install --claude`가 PreToolUse 게이트 훅 등록(`hook_specs`, `gate_command`)
+- [x] 9. 평가 세트(개발용/검증용 분리, `#[ignore]`)(개발용 정답 22/30, 위험 명령 놓침 0건, 정상→deny 1건으로 enforce 조건 미충족. 검증용은 임계값 결정 뒤 한 번)
+- [x] 10. README와 CLAUDE.md 갱신(README 섹션, CLAUDE.md)
+- [x] 0.3.0 버전 업(별도 PR 대신 이 브랜치의 마지막 커밋)
+- [ ] 릴리스: PR 머지 → `v0.3.0` 태그 → 워크플로 → 공개 자산 검증 → tap formula와 저장소 사본 갱신 → 릴리스 본문
+- [ ] 11. 실제 Claude Code 세션에서 감사 모드 시범 운영(표시 확인), 임계값 결정 뒤 검증용 세트 1회

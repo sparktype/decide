@@ -11,6 +11,9 @@ use std::time::{Duration, Instant};
 
 const MAX_CACHE_ENTRIES: usize = 64;
 
+/// 이 데몬 바이너리의 버전. 요청의 `client_version`과 비교한다.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 pub const TYPE_WITH_QUESTIONS: &str = "type과 questions는 함께 쓸 수 없습니다";
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -76,19 +79,37 @@ pub fn handle_line<T: Transport>(
     transport: &mut T,
     cache: &mut Cache,
 ) -> Option<String> {
+    handle_request(line, env, transport, cache).map(|(payload, _)| payload)
+}
+
+/// 한 줄 요청을 처리해 `(응답, 계속 서비스할지)`를 돌려준다. 요청의 선택 필드 `client_version`이 이
+/// 데몬의 버전과 다르면 백엔드를 부르지 않고 `{"stale":true,"version":…}`로 답하며 데몬은 끝난다 —
+/// 업그레이드 뒤에도 옛 바이너리의 데몬이 계속 답하는 것을 막는다. 필드가 없는 옛 클라이언트는 그대로 동작한다.
+pub fn handle_request<T: Transport>(
+    line: &str,
+    env: &Env,
+    transport: &mut T,
+    cache: &mut Cache,
+) -> Option<(String, bool)> {
     if line.trim().is_empty() {
         return None;
     }
-    let payload = match serde_json::from_str::<Value>(line) {
-        Ok(raw) => match call(&raw, env, transport, cache) {
-            Ok(result) => {
-                serde_json::to_string(&result).unwrap_or_else(|err| error_json(&err.to_string()))
-            }
-            Err(err) => error_json(&err),
-        },
-        Err(err) => error_json(&err.to_string()),
+    let raw = match serde_json::from_str::<Value>(line) {
+        Ok(raw) => raw,
+        Err(err) => return Some((error_json(&err.to_string()), true)),
     };
-    Some(payload)
+    if let Some(client) = raw.get("client_version").and_then(Value::as_str) {
+        if client != VERSION {
+            return Some((json!({"stale": true, "version": VERSION}).to_string(), false));
+        }
+    }
+    let payload = match call(&raw, env, transport, cache) {
+        Ok(result) => {
+            serde_json::to_string(&result).unwrap_or_else(|err| error_json(&err.to_string()))
+        }
+        Err(err) => error_json(&err),
+    };
+    Some((payload, true))
 }
 
 fn call<T: Transport>(
@@ -154,7 +175,11 @@ pub fn serve(path: &Path, idle: Duration) -> std::io::Result<()> {
     let mut cache = Cache::default();
     loop {
         match accept_within(&listener, idle)? {
-            Some(stream) => handle_connection(stream, &env, &mut transport, &mut cache),
+            Some(stream) => {
+                if !handle_connection(stream, &env, &mut transport, &mut cache) {
+                    break;
+                }
+            }
             None => break,
         }
     }
@@ -165,27 +190,29 @@ pub fn serve_default() -> std::io::Result<()> {
     serve(&default_socket_path(), Duration::from_secs(30 * 60))
 }
 
+/// 연결 하나를 처리한다. 계속 서비스해야 하면 true, stale 응답을 했으면 false(데몬이 끝난다).
 fn handle_connection<T: Transport>(
     stream: UnixStream,
     env: &Env,
     transport: &mut T,
     cache: &mut Cache,
-) {
+) -> bool {
     let _ = stream.set_read_timeout(None);
     let mut writer = match stream.try_clone() {
         Ok(writer) => writer,
-        Err(_) => return,
+        Err(_) => return true,
     };
     let mut line = String::new();
     if BufReader::new(stream).read_line(&mut line).is_err() {
-        return;
+        return true;
     }
-    let Some(payload) = handle_line(&line, env, transport, cache) else {
-        return;
+    let Some((payload, keep_serving)) = handle_request(&line, env, transport, cache) else {
+        return true;
     };
     let _ = writer.write_all(payload.as_bytes());
     let _ = writer.write_all(b"\n");
     let _ = writer.flush();
+    keep_serving
 }
 
 struct SocketGuard(PathBuf);
@@ -279,6 +306,12 @@ mod tests {
         // `local::infer`를 직접 호출한다 — 가중치 유무에 따라 성공/실패가
         // 환경마다 다르므로 응답 모양은 단정하지 않고, transport가 추가로
         // 호출되지 않았다는 것만 확인한다.
+        // CLEF_WEIGHTS를 없는 디렉터리로 고정해, 이 테스트만 단독으로 돌려도 HuggingFace에서
+        // 가중치(약 10GB)를 받으려 하지 않고 즉시 하드 에러가 나게 한다(backend.rs 테스트와 같은 방식).
+        std::env::set_var(
+            "CLEF_WEIGHTS",
+            std::env::temp_dir().join(format!("clef-weights-daemon-no-weights-{}", std::process::id())),
+        );
         let env = Env {
             backend: Some("local".into()),
             api_key: None,
@@ -332,6 +365,100 @@ mod tests {
         assert!(!claim_socket(&path).unwrap());
         assert!(path.exists());
         drop(listener);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    const NOUL_LINE: &str = r#"{"state":"s","type":"noul","instructions":"참인가?"}"#;
+
+    fn with_client_version(version: &str) -> String {
+        format!(
+            r#"{{"state":"s","type":"noul","instructions":"참인가?","client_version":"{version}"}}"#
+        )
+    }
+
+    #[test]
+    fn a_matching_client_version_is_answered_normally_and_keeps_serving() {
+        let env = Env {
+            backend: None,
+            api_key: Some("k".into()),
+        };
+        let mut script = Script {
+            calls: Cell::new(0),
+        };
+        let mut cache = Cache::default();
+        let (payload, keep_serving) =
+            handle_request(&with_client_version(VERSION), &env, &mut script, &mut cache).unwrap();
+        let parsed: Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(parsed["answer"]["noul"], 0.8);
+        assert!(keep_serving);
+        assert_eq!(script.calls.get(), 1);
+    }
+
+    #[test]
+    fn a_different_client_version_gets_a_stale_reply_without_a_backend_call() {
+        let env = Env {
+            backend: None,
+            api_key: Some("k".into()),
+        };
+        let mut script = Script {
+            calls: Cell::new(0),
+        };
+        let mut cache = Cache::default();
+        let (payload, keep_serving) =
+            handle_request(&with_client_version("0.0.1"), &env, &mut script, &mut cache).unwrap();
+        let parsed: Value = serde_json::from_str(&payload).unwrap();
+        assert_eq!(parsed, json!({"stale": true, "version": VERSION}));
+        assert!(!keep_serving, "stale 응답 뒤 데몬은 끝나야 한다");
+        assert_eq!(script.calls.get(), 0);
+    }
+
+    #[test]
+    fn a_request_without_a_client_version_behaves_as_before() {
+        let env = Env {
+            backend: None,
+            api_key: Some("k".into()),
+        };
+        let mut script = Script {
+            calls: Cell::new(0),
+        };
+        let mut cache = Cache::default();
+        let (payload, keep_serving) = handle_request(NOUL_LINE, &env, &mut script, &mut cache).unwrap();
+        assert!(serde_json::from_str::<Value>(&payload).unwrap().get("stale").is_none());
+        assert!(keep_serving);
+    }
+
+    #[test]
+    fn serve_replies_stale_then_exits_and_unlinks_the_socket() {
+        let dir = std::env::temp_dir().join(format!(
+            "decide-stale-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("decide.sock");
+        let server_path = path.clone();
+        // 유휴 종료(10초)가 아니라 stale 때문에 끝나는지 보려고 일부러 길게 잡는다.
+        let server = std::thread::spawn(move || serve(&server_path, Duration::from_secs(10)));
+        let started = Instant::now();
+        while !path.exists() {
+            assert!(started.elapsed() < Duration::from_secs(5), "소켓이 생기지 않았다");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let mut stream = UnixStream::connect(&path).unwrap();
+        writeln!(stream, "{}", with_client_version("0.0.1")).unwrap();
+        let mut reply = String::new();
+        BufReader::new(stream).read_line(&mut reply).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&reply).unwrap(),
+            json!({"stale": true, "version": VERSION})
+        );
+        server.join().unwrap().unwrap();
+        assert!(started.elapsed() < Duration::from_secs(5), "stale 뒤 바로 끝나야 한다");
+        assert!(!path.exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
