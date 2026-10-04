@@ -197,6 +197,9 @@ fn handle_connection<T: Transport>(
     transport: &mut T,
     cache: &mut Cache,
 ) -> bool {
+    // 리스너는 idle 종료를 위해 논블로킹이고, macOS(BSD)에서는 accept한 연결도 그 모드를 물려받는다.
+    // 블로킹으로 되돌리지 않으면 아직 도착하지 않은 요청에 WouldBlock을 받고 연결을 닫아 버린다.
+    let _ = stream.set_nonblocking(false);
     let _ = stream.set_read_timeout(None);
     let mut writer = match stream.try_clone() {
         Ok(writer) => writer,
@@ -459,6 +462,36 @@ mod tests {
         server.join().unwrap().unwrap();
         assert!(started.elapsed() < Duration::from_secs(5), "stale 뒤 바로 끝나야 한다");
         assert!(!path.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_client_that_sends_its_request_late_still_gets_an_answer() {
+        // macOS(BSD)에서는 논블로킹 리스너가 accept한 연결도 논블로킹을 물려받는다. 데몬이 accept 직후
+        // 바로 읽다가 아직 도착하지 않은 요청에 WouldBlock을 받고 연결을 닫아 버리면, 느리게 쓰는
+        // 클라이언트는 BrokenPipe나 빈 응답을 받는다. 연결한 뒤 한참 있다가 보내도 답해야 한다.
+        let dir = std::env::temp_dir().join(format!("dgd-late-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("d.sock");
+        let server_path = path.clone();
+        let server = std::thread::spawn(move || serve(&server_path, Duration::from_secs(10)));
+        let started = Instant::now();
+        while !path.exists() {
+            assert!(started.elapsed() < Duration::from_secs(5), "소켓이 생기지 않았다");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let mut stream = UnixStream::connect(&path).unwrap();
+        std::thread::sleep(Duration::from_millis(250));
+        // stale 응답 경로를 써서 백엔드 없이 답을 받는다. 이 답이 오면 데몬도 끝난다.
+        writeln!(stream, "{}", with_client_version("0.0.1")).expect("늦게 보내도 연결이 살아 있어야 한다");
+        let mut reply = String::new();
+        BufReader::new(stream).read_line(&mut reply).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&reply).expect("빈 응답이면 연결이 먼저 닫힌 것이다"),
+            json!({"stale": true, "version": VERSION})
+        );
+        server.join().unwrap().unwrap();
         let _ = std::fs::remove_dir_all(&dir);
     }
 
