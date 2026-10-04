@@ -46,6 +46,26 @@ pub struct HookSpec<'a> {
     pub timeout: u64,
 }
 
+const GATE_MATCHER: &str = "Bash";
+const GATE_TIMEOUT_SECS: u64 = 10;
+
+pub fn gate_command(bin: &str) -> String {
+    format!("{bin} gate bash-risk")
+}
+
+/// `decide install --claude`가 한 번에 넣을 훅: 결과 표시(PostToolUse)와 bash-risk 게이트(PreToolUse, Bash).
+pub fn hook_specs<'a>(display_command: &'a str, gate_command: &'a str) -> [HookSpec<'a>; 2] {
+    [
+        display_spec(display_command),
+        HookSpec {
+            event: "PreToolUse",
+            matcher: GATE_MATCHER,
+            command: gate_command,
+            timeout: GATE_TIMEOUT_SECS,
+        },
+    ]
+}
+
 fn display_spec(command: &str) -> HookSpec<'_> {
     HookSpec {
         event: "PostToolUse",
@@ -187,6 +207,17 @@ mod tests {
             hook_command("/opt/homebrew/bin/decide"),
             "/opt/homebrew/bin/decide hook"
         );
+    }
+
+    #[test]
+    fn gate_command_and_the_install_specs_pair_the_display_hook_with_the_bash_gate() {
+        assert_eq!(gate_command("/opt/homebrew/bin/decide"), "/opt/homebrew/bin/decide gate bash-risk");
+        let display = hook_command("/b/decide");
+        let gate = gate_command("/b/decide");
+        let [first, second] = hook_specs(&display, &gate);
+        assert_eq!((first.event, first.matcher), ("PostToolUse", HOOK_MATCHER));
+        assert_eq!((second.event, second.matcher, second.timeout), ("PreToolUse", "Bash", 10));
+        assert_eq!(second.command, "/b/decide gate bash-risk");
     }
 
     #[test]

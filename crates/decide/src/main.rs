@@ -163,7 +163,8 @@ decide [mcp|daemon|install [--claude]|hook|gate]
   mcp      stdio MCP
   daemon   ~/.cache/decide/decide.sock
   install  claude mcp add로 Claude Code 사용자 스코프에 decide를 등록한다
-           --claude  MCP 등록에 더해 표시 훅(PostToolUse)도 Claude Code 사용자 설정에 넣는다
+           --claude  MCP 등록에 더해 표시 훅(PostToolUse)과 bash-risk 게이트 훅(PreToolUse, Bash)도
+                     Claude Code 사용자 설정에 넣는다. 게이트는 기본이 감사 모드라 막지 않는다
   hook     Claude Code PostToolUse 훅. decide 결과를 사용자에게 한 줄로 보여준다
   gate     Claude Code 훅(PreToolUse)에서 decide로 판정한다
            gate <이름>              stdin의 훅 입력을 판정해 훅 출력 JSON을 낸다(이름: bash-risk)
@@ -207,9 +208,10 @@ fn run_install() -> io::Result<()> {
 fn run_install_claude() -> io::Result<()> {
     run_install()?;
     let path = claude::settings_path().map_err(io::Error::other)?;
-    let command = claude::hook_command(DECIDE_BIN);
-    match claude::install_hook(&path, &command).map_err(io::Error::other)? {
-        Installed::Added => println!("훅을 등록했습니다: {}", path.display()),
+    let display = claude::hook_command(DECIDE_BIN);
+    let gate = claude::gate_command(DECIDE_BIN);
+    match claude::install_hooks(&path, &claude::hook_specs(&display, &gate)).map_err(io::Error::other)? {
+        Installed::Added => println!("훅을 등록했습니다(결과 표시, bash-risk 게이트): {}", path.display()),
         Installed::AlreadyPresent => println!("훅이 이미 등록돼 있습니다: {}", path.display()),
     }
     Ok(())
