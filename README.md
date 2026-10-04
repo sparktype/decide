@@ -24,7 +24,7 @@ Apple Silicon Mac에서는 탭으로 깐다.
 brew install sparktype/tap/decide
 ```
 
-버전은 0.2.1다. 바이너리는 `/opt/homebrew/bin/decide`다. formula는 GitHub Release에 올라간 사전 빌드 arm64 바이너리를 받아 그대로 설치한다 — 설치에 Rust 툴체인이 필요 없다. 가중치와 API 키는 병 밖에 둔다.
+버전은 0.3.0다. 바이너리는 `/opt/homebrew/bin/decide`다. formula는 GitHub Release에 올라간 사전 빌드 arm64 바이너리를 받아 그대로 설치한다 — 설치에 Rust 툴체인이 필요 없다. 가중치와 API 키는 병 밖에 둔다.
 
 ```bash
 decide install

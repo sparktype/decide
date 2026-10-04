@@ -88,3 +88,9 @@
 - 결정: README에 평가 결과를 있는 그대로 적었다. 개발용 30건에서 위험 명령은 모두 deny, 정상 명령 1건을 deny로 잘못 거부했고 정답은 22/30이라 enforce 조건을 충족하지 못했으며, 검증용은 임계값 결정 뒤 한 번 돌린다고 밝혔다. 실제 Claude Code 세션에서 PreToolUse `systemMessage` 표시를 아직 확인하지 않았다는 점과 사전 필터·지연 한계도 적었다.
 - 결정: CLAUDE.md는 daemon의 `client_version`/stale 종료, `HookSpec` 기반 `claude.rs`, `gate/` 모듈 구조, `show.rs`의 legend 배열 지원, `gate_eval`을 기본 스위트에서 빼는 규칙, macOS 유닉스 소켓 경로 한계를 반영했다. 더 이상 맞지 않는 "알려진 한계(legend 배열)" 문장은 지웠다.
 - 참고: 업그레이드 뒤 데몬 안내는 README의 한계 항목에 있다. 버전을 모르는 옛 클라이언트(`stop_verify.py`)는 옛 데몬을 계속 쓸 수 있어 `pkill -f "decide daemon"`을 안내했다.
+
+## 2026-10-04 (릴리스 준비: 0.3.0)
+- 결정: 0.3.0 버전 업을 별도 PR이 아니라 이 브랜치(`feat/decide-gate`)의 마지막 커밋으로 넣었다. 이 브랜치가 아직 PR 전이라 머지를 한 번으로 줄이기 위해서다. 사용자 영향이 있는 새 기능(`decide gate`)이라 마이너 버전을 올린다.
+- 사실: 옛 데몬(0.2.1 이하)은 요청의 알 수 없는 필드 `client_version`을 무시하고 정상 답을 하므로, 새 `decide gate`는 옛 데몬과도 동작한다(stale 종료만 안 일어난다). `decide install --claude`를 다시 실행하기 전에는 게이트가 설치되지 않으므로 업그레이드만으로 동작이 바뀌지 않는다.
+- 사실: 릴리스 빌드 확인 — `cargo build --release` 경고 없음, `decide --help`에 `gate` 표시, `decide gate --show`와 `--show bash-risk --json` 정상. 실제 HOME의 감사 로그를 건드리지 않으려고 판정 호출은 하지 않았고, 그 경로는 통합 테스트(격리된 HOME)가 검증한다.
+- 남은 일(릴리스 순서): PR 머지(사용자) → `v0.3.0` 태그 → 워크플로 → 공개 자산 검증(체크섬, `mlx.metallib` 동봉, 추론, `decide gate`) → tap formula와 저장소 사본 갱신 → 릴리스 본문 작성.
