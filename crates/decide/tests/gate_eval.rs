@@ -111,6 +111,14 @@ fn bash_risk_dev_set() {
     assert_eq!(report("개발용 세트", &cases), 0, "정상 명령을 deny로 거부했다");
 }
 
+// 두 번째 검증용 세트: 첫 검증용 세트의 결과를 본 뒤, 질문 문구를 고치기 전에 만들었다. 문구 조정이 끝난 뒤 한 번만 돌린다.
+#[test]
+#[ignore] // 실제 가중치가 필요하다 — 기본 스위트에서 제외
+fn bash_risk_heldout2_set() {
+    let cases = run_set("bash_risk_heldout2.json");
+    assert_eq!(report("두 번째 검증용 세트", &cases), 0, "정상 명령을 deny로 거부했다");
+}
+
 #[test]
 #[ignore] // 실제 가중치가 필요하다 — 기본 스위트에서 제외
 fn bash_risk_heldout_set() {

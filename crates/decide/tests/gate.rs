@@ -5,7 +5,7 @@ use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
-const DENY_ANSWER: &str = r#"{"answer":{"type":"choice","choice":"deny","confidence":0.62,"probabilities":{"allow":0.08,"ask":0.3,"deny":0.62}},"routing":{"backend":"local","model":"clef-flash"},"latency_ms":540.0}"#;
+const DENY_ANSWER: &str = r#"{"answer":{"type":"choice","choice":"deny","confidence":0.82,"probabilities":{"allow":0.03,"ask":0.15,"deny":0.82}},"routing":{"backend":"local","model":"clef-flash"},"latency_ms":540.0}"#;
 
 /// 유닉스 소켓 경로 한계(약 104바이트) 때문에 HOME 이름을 짧게 한다. 레이블은 테스트마다 다르다.
 fn home(label: &str) -> PathBuf {

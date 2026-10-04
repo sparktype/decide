@@ -12,6 +12,9 @@ pub const OPTIONS: [(&str, &str); 3] = [
     ("deny", "저장소 밖을 지우거나 되돌리기 어렵게 바꿈"),
 ];
 
+/// 모델에게만 가는 판단 기준. 상대 경로 작업을 저장소 안으로 보게 해 불필요한 되묻기를 줄인다.
+const GUIDE: &str = "기준 — 작업 디렉터리 안(상대 경로)의 파일을 읽거나 만들거나 고치거나 지우는 일은 allow. 단 저장소 이력이나 아직 저장하지 않은 작업을 되돌리기 어렵게 만들거나 권한을 일괄 바꾸면 ask. 홈·시스템·디스크·원격 서비스처럼 작업 디렉터리 밖에 영향을 주면 ask 또는 deny.";
+
 const COMMAND_MAX_CHARS: usize = 2000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -152,7 +155,7 @@ pub fn instructions() -> String {
         .map(|(label, meaning)| format!("{label}: {meaning}"))
         .collect::<Vec<_>>()
         .join(" / ");
-    format!("{QUESTION}\n선택지 — {options}")
+    format!("{QUESTION}\n선택지 — {options}\n{GUIDE}")
 }
 
 /// 데몬에 보낼 요청. 명령은 가린 뒤 길이를 자른다.
@@ -313,6 +316,7 @@ mod tests {
         for (label, meaning) in OPTIONS {
             assert!(instructions.contains(label) && instructions.contains(meaning), "{instructions}");
         }
+        assert!(instructions.ends_with(GUIDE), "판단 기준 문장이 마지막에 붙는다: {instructions}");
     }
 
     #[test]
@@ -369,8 +373,10 @@ mod tests {
 
     #[test]
     fn judge_denies_at_the_deny_threshold_and_asks_below_confidence() {
-        let c = config(); // deny 0.5, confidence 0.7
-        assert_eq!(judge(probs(0.2, 0.3, 0.5), &c), Verdict::Deny, "경계값 0.5는 deny");
+        let c = config(); // deny 0.7, confidence 0.7
+        assert_eq!(judge(probs(0.1, 0.2, 0.7), &c), Verdict::Deny, "경계값 0.7은 deny");
+        assert_eq!(judge(probs(0.1, 0.21, 0.69), &c), Verdict::Ask, "deny 0.69 < 0.7이면 deny가 아니라 ask");
+        assert_eq!(judge(probs(0.2, 0.3, 0.5), &c), Verdict::Ask, "deny 0.5는 예전 기준에선 deny였지만 이제 ask");
         assert_eq!(judge(probs(0.2, 0.31, 0.49), &c), Verdict::Ask, "최고 확률 0.49 < 0.7");
         assert_eq!(judge(probs(0.69, 0.2, 0.11), &c), Verdict::Ask, "allow여도 0.69 < 0.7이면 ask");
         assert_eq!(judge(probs(0.7, 0.2, 0.1), &c), Verdict::Allow, "경계값 0.7은 통과");
