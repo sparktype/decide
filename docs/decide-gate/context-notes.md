@@ -45,3 +45,10 @@
 - 결정: 판정은 `deny` 확률 ≥ deny 임계값이면 Deny, 최고 확률 < confidence면 Ask, 아니면 최고 선택지이며 동률이면 더 엄격한 쪽이다. 경계값 0.5와 0.7을 테스트로 고정했다.
 - 결정: 선택지 의미는 모델에 라벨만 가므로 질문 문장 뒤에 "선택지 — allow: …/ask: …/deny: …"로 같이 넣는다. 요청 state는 가린 명령(2000자 상한)과 cwd 끝 두 단계다.
 - 참고: 의도적으로 "cat 같은 읽기 명령은 사전 필터 통과"다. 민감 파일을 읽는 것은 이 게이트의 질문(파괴·되돌리기 어려운 변경) 범위가 아니다.
+
+## 2026-10-04 (5단계 완료)
+- 결정: `gate/output.rs`의 `hook_output(&Outcome) -> Option<Value>`가 훅이 낼 JSON을 만든다. `Outcome.kind`는 `Prefiltered`/`Judged{verdict, probs, result}`/`Failed{reason}`이고 명령은 호출자가 가린 값을 넘긴다.
+- 결정: 감사 모드는 `systemMessage`만 내고 `hookSpecificOutput`을 절대 내지 않는다(테스트로 고정). enforce는 Deny/Ask일 때만 `permissionDecision`(+이유)을 더한다. 실패(`Failed`)는 enforce여도 결정하지 않는다(실패 시 통과).
+- 결정: 표시 규칙은 `Off`면 문구 없음(enforce 결정은 문구 없이도 낸다), `Decisions`면 Ask/Deny와 실패만, `All`이면 사전 필터와 allow까지다.
+- 결정: 근거 문구는 설계서 형식 그대로이고 푸터는 `show::footer`를 재사용한다(캐시 표시 포함). 확률은 큰 순으로 정렬하되 동률이면 deny, ask, allow 순이다. 대상은 `show::truncate`로 80자에서 자른다. 설정 경고가 있으면 마지막에 "설정 경고 n건"을 한 줄 붙인다.
+- 사실: `show.rs`의 알려진 한계(로컬 score의 `legend`가 배열이면 요약이 조용히 사라짐)를 고쳤다. 객체(TypeSafe)와 배열(로컬) 둘 다 읽는다. `truncate`, `pct`, `footer`는 `pub(crate)`로 열었다.
