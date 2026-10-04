@@ -12,3 +12,11 @@
 - 사실: mlx-rs 0.32 빌드(MLX C++ + Metal 커널)는 처음에 약 3분 걸렸다. 연산 API는 전부 있었다(quantized_matmul, dequantize, fast::rope/rms_norm/sdpa, load_safetensors).
 - 사실: 기본 스위트에서 `claude::tests::install_twice_changes_nothing_the_second_time`가 한 번 실패했다. `temp_dir()`이 PID+나노초만 써서 병렬 테스트끼리 같은 디렉터리를 받는 기존 플레이크로 보이고(단독·재실행은 통과), 이번 변경과 무관해 건드리지 않았다.
 - 미검증: 실제 가중치 forward. 순서는 (1) `DECIDE_BACKEND=local cargo test --features "mlx parity"` 또는 수동 호출로 오라클 대조, (2) 지연 측정(순차 델타 루프가 병목인지), (3) 필요 시 청크 스캔/Metal 커널.
+
+## 2026-10-04 (실측)
+- 사실: 8비트 MLX parity는 골든 5건 모두 오라클과 일치했고 최대 로짓 차이는 0.084~0.095다. Q6_K는 같은 5건 중 11옵션 near-tie 1건이 불일치였는데 이번엔 일치했다.
+- 사실: 처음 ops 순차 루프는 짧은 입력 약 1~2초, 907토큰 6.5초였다. mlx-lm의 기본 Metal 커널을 `mlx-sys`(`mlx_fast_metal_kernel_*`)로 직접 호출하도록 바꾸자 각각 약 0.6초, 2.8~3.7초로 줄었다. mlx-rs에는 이 래퍼가 없어서 `mlx-sys`를 직접 의존성으로 추가했다.
+- 사실: 구간 계측 결과 백본이 약 90%(토큰당 약 3.6ms, 선형)이고 헤드(candle CPU)는 40~130ms다. 9B×2×토큰 FLOP로 환산하면 약 5 TFLOP/s라 M1 Max 실효 한계에 가깝다. 헤드를 GPU로 옮겨도 이득은 작다.
+- 사실: 같은 입력의 candle CPU(Q6_K) 기준선은 짧은 입력 30~48초, 907토큰 125초였다(모델 로드는 첫 호출에 포함). MLX가 약 45~50배 빠르다.
+- 참고: 테스트 도중 델타 커널 비교 테스트가 한 번 실패했는데 원인은 합성 입력이 정규화되지 않아 값이 수십만으로 폭주해 절대 오차 기준이 깨진 것이었다(값은 부동소수점 정밀도까지 일치). q/k 스케일을 줄여 고쳤다.
+- 남은 일: (1) 릴리스 파이프라인(GitHub Actions)에서 mlx 빌드를 포함할지 결정 — 러너에 Metal Toolchain이 필요하다. (2) 기본 엔진을 mlx로 배포할지. (3) show.rs의 local score legend 형태 문제는 기존 한계 그대로다.

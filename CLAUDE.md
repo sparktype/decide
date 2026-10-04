@@ -28,8 +28,12 @@ runs `mlx-community/clef-flash-8bit` (8-bit affine, about 10.7GB) on the GPU thr
 (`local/mlx_backbone.rs`); `DECIDE_LOCAL_ENGINE=candle` goes back to the GGUF CPU path, and the default build
 has no MLX at all. The joint head, tokenizer, and postprocess are shared and stay on candle CPU. `CLEF_WEIGHTS`
 must then point at a directory holding that repo's `config.json`, `model.safetensors.index.json`, shards, and
-`joint_head.safetensors`. The MLX path is implemented and unit-tested but not yet measured against the
-oracle or for latency; see `docs/mlx-backend/` for the plan, checklist, and decision notes.
+`joint_head.safetensors`. Measured on an M1 Max (64GB): `cargo test --features "mlx parity"` agrees with the
+BF16 oracle on 5/5 golden cases (max raw-logit diff 0.095, including the 11-option near-tie case that Q6_K
+misses), and a warm call takes about 0.6s for ~150 tokens and 2.8s for ~900 tokens, against 30s and 125s on
+the candle CPU path. Prefill is compute-bound at roughly 3.6ms/token, so expect little more from kernel work
+on this chip. The gated-delta scan runs as a Metal kernel through `mlx-sys` (`mlx_backbone.rs`), checked
+against an ops-based reference in a unit test. See `docs/mlx-backend/` for the plan, checklist, and notes.
 
 On a 5-case golden set, Q6_K agrees qualitatively with the real BF16
 Cloudflare/clef-flash model — compared via `scripts/clef_flash_oracle.py`, gated by

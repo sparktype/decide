@@ -296,12 +296,12 @@ fn depthwise_causal_conv(qkv: &Array, weight: &Array, kernel: i32, channels: i32
     Ok(acc.expect("kernel >= 1"))
 }
 
-/// 게이트드 델타 규칙(mlx-lm `gated_delta_ops`의 순차 루프와 같은 수식).
+/// 게이트드 델타 규칙(mlx-lm `gated_delta_ops`의 순차 루프와 같은 수식). 커널 결과를 검증하는
+/// 참조 구현이다 — 기본 경로는 `gated_delta_rule`(Metal 커널)이다.
 ///
 /// `q`/`k`는 `[1, L, Hk, Dk]`, `v`는 `[1, L, Hv, Dv]`, `g`/`beta`는 `[1, L, Hv]`.
 /// 상태는 `[1, Hv, Dv, Dk]` f32. 스텝마다 브로드캐스트+합 대신 matmul을 써서 연산 수를 줄인다.
-// ponytail: 순차 루프라 그래프 크기가 L에 비례한다. 느리면 청크 스캔이나 Metal 커널로 교체한다.
-fn gated_delta_rule(q: &Array, k: &Array, v: &Array, g: &Array, beta: &Array, cfg: &Config) -> R<Array> {
+fn gated_delta_rule_ops(q: &Array, k: &Array, v: &Array, g: &Array, beta: &Array, cfg: &Config) -> R<Array> {
     let len = q.shape()[1];
     let repeat = cfg.lin_v_heads / cfg.lin_k_heads;
     let (q, k) = if repeat > 1 {
@@ -334,6 +334,187 @@ fn gated_delta_rule(q: &Array, k: &Array, v: &Array, g: &Array, beta: &Array, cf
     }
     let stacked = concatenate(&outputs, 3)?; // [1, Hv, Dv, L]
     stacked.transpose_axes(&[0, 3, 1, 2])?.as_dtype(q.dtype())
+}
+
+/// mlx-lm `gated_delta.py`의 기본(스칼라 게이트, 마스크 없음) Metal 커널. 스레드 하나가 상태 행
+/// 하나(Dv 한 줄)를 맡고 시간 축을 커널 안에서 돈다 — ops 루프처럼 스텝마다 커널을 띄우지 않는다.
+const DELTA_KERNEL_SOURCE: &str = r#"
+    auto n = thread_position_in_grid.z;
+    auto b_idx = n / Hv;
+    auto hv_idx = n % Hv;
+    auto hk_idx = hv_idx / (Hv / Hk);
+    constexpr int n_per_t = Dk / 32;
+
+    auto q_ = q + b_idx * T * Hk * Dk + hk_idx * Dk;
+    auto k_ = k + b_idx * T * Hk * Dk + hk_idx * Dk;
+    auto v_ = v + b_idx * T * Hv * Dv + hv_idx * Dv;
+    y += b_idx * T * Hv * Dv + hv_idx * Dv;
+
+    auto dk_idx = thread_position_in_threadgroup.x;
+    auto dv_idx = thread_position_in_grid.y;
+
+    auto i_state = state_in + (n * Dv + dv_idx) * Dk;
+    auto o_state = state_out + (n * Dv + dv_idx) * Dk;
+
+    float state[n_per_t];
+    for (int i = 0; i < n_per_t; ++i) {
+      auto s_idx = n_per_t * dk_idx + i;
+      state[i] = static_cast<float>(i_state[s_idx]);
+    }
+
+    auto g_ = g + b_idx * T * Hv;
+    auto beta_ = beta + b_idx * T * Hv;
+
+    for (int t = 0; t < T; ++t) {
+      float kv_mem = 0.0f;
+      for (int i = 0; i < n_per_t; ++i) {
+        auto s_idx = n_per_t * dk_idx + i;
+        state[i] = state[i] * g_[hv_idx];
+        kv_mem += state[i] * k_[s_idx];
+      }
+      kv_mem = simd_sum(kv_mem);
+
+      auto delta = (v_[dv_idx] - kv_mem) * beta_[hv_idx];
+
+      float out = 0.0f;
+      for (int i = 0; i < n_per_t; ++i) {
+        auto s_idx = n_per_t * dk_idx + i;
+        state[i] = state[i] + k_[s_idx] * delta;
+        out += state[i] * q_[s_idx];
+      }
+      out = simd_sum(out);
+      if (thread_index_in_simdgroup == 0) {
+        y[dv_idx] = static_cast<InT>(out);
+      }
+      q_ += Hk * Dk;
+      k_ += Hk * Dk;
+      v_ += Hv * Dv;
+      y += Hv * Dv;
+      g_ += Hv;
+      beta_ += Hv;
+    }
+    for (int i = 0; i < n_per_t; ++i) {
+      auto s_idx = n_per_t * dk_idx + i;
+      o_state[s_idx] = static_cast<StT>(state[i]);
+    }
+"#;
+
+struct DeltaKernel(mlx_sys::mlx_fast_metal_kernel);
+
+// 커널 핸들은 만든 뒤 읽기만 하고, 호출은 백본 `Mutex` 안에서만 일어난다.
+unsafe impl Send for DeltaKernel {}
+unsafe impl Sync for DeltaKernel {}
+
+fn delta_kernel() -> &'static DeltaKernel {
+    static KERNEL: std::sync::OnceLock<DeltaKernel> = std::sync::OnceLock::new();
+    KERNEL.get_or_init(|| unsafe {
+        let names = |items: &[&str]| {
+            let vector = mlx_sys::mlx_vector_string_new();
+            for item in items {
+                let c = std::ffi::CString::new(*item).expect("NUL 없는 상수");
+                mlx_sys::mlx_vector_string_append_value(vector, c.as_ptr());
+            }
+            vector
+        };
+        let inputs = names(&["q", "k", "v", "g", "beta", "state_in", "T"]);
+        let outputs = names(&["y", "state_out"]);
+        let name = std::ffi::CString::new("gated_delta_step").expect("NUL 없는 상수");
+        let source = std::ffi::CString::new(DELTA_KERNEL_SOURCE).expect("NUL 없는 상수");
+        let header = std::ffi::CString::new("").expect("NUL 없는 상수");
+        let kernel = mlx_sys::mlx_fast_metal_kernel_new(
+            name.as_ptr(),
+            inputs,
+            outputs,
+            source.as_ptr(),
+            header.as_ptr(),
+            true,
+            false,
+        );
+        mlx_sys::mlx_vector_string_free(inputs);
+        mlx_sys::mlx_vector_string_free(outputs);
+        DeltaKernel(kernel)
+    })
+}
+
+/// 게이트드 델타 규칙을 Metal 커널로 계산한다. 입력 규약은 `gated_delta_rule_ops`와 같지만
+/// `q`/`k`는 헤드를 늘리지 않은 `[1, L, Hk, Dk]`다(커널이 `hv / (Hv/Hk)`로 매핑한다).
+/// 커널은 `Dk`가 32의 배수여야 한다.
+fn gated_delta_rule(q: &Array, k: &Array, v: &Array, g: &Array, beta: &Array, cfg: &Config) -> R<Array> {
+    if cfg.lin_k_dim % 32 != 0 {
+        return Err(Exception::custom("델타 커널은 linear_key_head_dim이 32의 배수여야 합니다"));
+    }
+    let len = q.shape()[1];
+    let state = ops::zeros::<f32>(&[1, cfg.lin_v_heads, cfg.lin_v_dim, cfg.lin_k_dim])?;
+    let t = Array::from_int(len);
+    let check = |code: i32, what: &str| -> R<()> {
+        if code == 0 { Ok(()) } else { Err(Exception::custom(format!("Metal 커널 설정 실패: {what}"))) }
+    };
+    unsafe {
+        let config = mlx_sys::mlx_fast_metal_kernel_config_new();
+        let result = (|| -> R<Array> {
+            let y_shape = [1, len, cfg.lin_v_heads, cfg.lin_v_dim];
+            let state_shape = [1, cfg.lin_v_heads, cfg.lin_v_dim, cfg.lin_k_dim];
+            check(
+                mlx_sys::mlx_fast_metal_kernel_config_add_output_arg(config, y_shape.as_ptr(), 4, q.dtype().into()),
+                "출력 y",
+            )?;
+            check(
+                mlx_sys::mlx_fast_metal_kernel_config_add_output_arg(
+                    config,
+                    state_shape.as_ptr(),
+                    4,
+                    Dtype::Float32.into(),
+                ),
+                "출력 state",
+            )?;
+            check(
+                mlx_sys::mlx_fast_metal_kernel_config_set_grid(config, 32, cfg.lin_v_dim, cfg.lin_v_heads),
+                "grid",
+            )?;
+            check(mlx_sys::mlx_fast_metal_kernel_config_set_thread_group(config, 32, 4, 1), "threadgroup")?;
+            let dtype_arg = |name: &str, dtype: Dtype| -> R<()> {
+                let c = std::ffi::CString::new(name).expect("NUL 없는 상수");
+                check(
+                    mlx_sys::mlx_fast_metal_kernel_config_add_template_arg_dtype(config, c.as_ptr(), dtype.into()),
+                    name,
+                )
+            };
+            let int_arg = |name: &str, value: i32| -> R<()> {
+                let c = std::ffi::CString::new(name).expect("NUL 없는 상수");
+                check(mlx_sys::mlx_fast_metal_kernel_config_add_template_arg_int(config, c.as_ptr(), value), name)
+            };
+            dtype_arg("InT", q.dtype())?;
+            dtype_arg("StT", Dtype::Float32)?;
+            int_arg("Dk", cfg.lin_k_dim)?;
+            int_arg("Dv", cfg.lin_v_dim)?;
+            int_arg("Hk", cfg.lin_k_heads)?;
+            int_arg("Hv", cfg.lin_v_heads)?;
+
+            let inputs = [q.as_ptr(), k.as_ptr(), v.as_ptr(), g.as_ptr(), beta.as_ptr(), state.as_ptr(), t.as_ptr()];
+            let input_vec = mlx_sys::mlx_vector_array_new_data(inputs.as_ptr(), inputs.len());
+            let mut output_vec = mlx_sys::mlx_vector_array_new();
+            let stream = mlx_rs::Stream::thread_local_or_default();
+            let code = mlx_sys::mlx_fast_metal_kernel_apply(
+                &mut output_vec,
+                delta_kernel().0,
+                input_vec,
+                config,
+                stream.as_ref().as_ptr(),
+            );
+            mlx_sys::mlx_vector_array_free(input_vec);
+            if code != 0 {
+                mlx_sys::mlx_vector_array_free(output_vec);
+                return Err(Exception::custom("Metal 델타 커널 실행에 실패했습니다"));
+            }
+            let mut y = mlx_sys::mlx_array_new();
+            let got = mlx_sys::mlx_vector_array_get(&mut y, output_vec, 0);
+            mlx_sys::mlx_vector_array_free(output_vec);
+            check(got, "출력 y 읽기")?;
+            Ok(Array::from_ptr(y))
+        })();
+        mlx_sys::mlx_fast_metal_kernel_config_free(config);
+        result
+    }
 }
 
 enum Mixer {
@@ -508,10 +689,46 @@ mod tests {
         let v = Array::from_slice(&[5.0f32, 6.0], &[1, 1, 1, 2]);
         let g = Array::from_slice(&[0.5f32], &[1, 1, 1]);
         let beta = Array::from_slice(&[0.5f32], &[1, 1, 1]);
-        let y = gated_delta_rule(&q, &k, &v, &g, &beta, &cfg).unwrap();
+        let y = gated_delta_rule_ops(&q, &k, &v, &g, &beta, &cfg).unwrap();
         y.eval().unwrap();
         // delta=[2.5,3]; state[d][j]=delta[d]*k[j]; y[d]=delta[d]*(k·q)=delta[d]*11
         assert_eq!(y.shape(), &[1, 1, 1, 2]);
         assert!(close(y.as_slice::<f32>(), &[27.5, 33.0], 1e-3));
+    }
+
+    #[test]
+    fn delta_kernel_matches_ops_reference() {
+        // 커널이 ops 참조 구현과 같은 값을 내는지 — GQA(Hv=2*Hk), 여러 스텝, 상태 감쇠 포함.
+        let cfg = Config {
+            hidden: 0, layers: 0, heads: 0, kv_heads: 0, head_dim: 0, rope_dims: 0, rope_theta: 0.0, eps: 0.0,
+            full_attention_interval: 4, lin_k_heads: 2, lin_v_heads: 4, lin_k_dim: 128, lin_v_dim: 8,
+            conv_kernel: 4, group_size: 64, bits: 8,
+        };
+        let len = 6;
+        let wave = |count: i32, freq: f32, shape: &[i32]| {
+            let steps = ops::arange::<_, f32>(None, count as f32, None).unwrap();
+            ops::sin(ops::multiply(steps, Array::from_f32(freq)).unwrap()).unwrap().reshape(shape).unwrap()
+        };
+        // q/k를 작게 둬 상태가 폭주하지 않게 한다(실제 경로는 L2 정규화된 값이 들어온다).
+        let small = |a: Array| ops::multiply(a, Array::from_f32(0.05)).unwrap();
+        let q = small(wave(len * 2 * 128, 0.37, &[1, len, 2, 128]));
+        let k = small(wave(len * 2 * 128, 0.11, &[1, len, 2, 128]));
+        let v = wave(len * 4 * 8, 0.53, &[1, len, 4, 8]);
+        let g = ops::add(
+            ops::multiply(wave(len * 4, 0.9, &[1, len, 4]), Array::from_f32(0.1)).unwrap(),
+            Array::from_f32(0.8),
+        )
+        .unwrap();
+        let beta = ops::add(
+            ops::multiply(wave(len * 4, 0.7, &[1, len, 4]), Array::from_f32(0.2)).unwrap(),
+            Array::from_f32(0.5),
+        )
+        .unwrap();
+        let expected = gated_delta_rule_ops(&q, &k, &v, &g, &beta, &cfg).unwrap().contiguous().unwrap();
+        let got = gated_delta_rule(&q, &k, &v, &g, &beta, &cfg).unwrap().contiguous().unwrap();
+        expected.eval().unwrap();
+        got.eval().unwrap();
+        assert_eq!(got.shape(), expected.shape());
+        assert!(close(got.as_slice::<f32>(), expected.as_slice::<f32>(), 1e-3));
     }
 }

@@ -402,6 +402,7 @@ dependencies = [
  "hf-hub",
  "libc",
  "mlx-rs",
+ "mlx-sys",
  "serde",
  "serde_json",
  "tokenizers",
