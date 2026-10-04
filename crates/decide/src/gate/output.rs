@@ -1,6 +1,6 @@
 // 게이트 판정을 Claude Code 훅 출력 JSON과 사용자에게 보여 줄 근거 문구로 바꾼다
-use crate::gate::bash_risk::{Probs, Verdict, QUESTION};
-use crate::gate::config::{Display, Mode};
+use crate::gate::bash_risk::{Probs, Verdict, OPTIONS, QUESTION};
+use crate::gate::config::{self, Config, Display, Loaded, Mode, BASH_RISK};
 use crate::show::{footer, pct, truncate};
 use serde_json::{json, Value};
 
@@ -25,6 +25,126 @@ pub struct Outcome {
     pub kind: Kind,
     /// 설정을 병합하며 무시한 항목 수.
     pub warnings: usize,
+}
+
+/// `--show`가 보여 줄 설정 파일 위치와 존재 여부.
+#[derive(Debug, Clone)]
+pub struct Location {
+    pub label: String,
+    pub exists: bool,
+}
+
+/// `decide gate --show`: 게이트 목록과 설정 파일 위치(+경고).
+pub fn show_overview(loaded: &Loaded, user: &Location, repo: &Location) -> String {
+    let config = &loaded.config;
+    let mode = if config.bash_risk.enabled { mode_name(config.mode) } else { "꺼짐" };
+    let mut lines = vec![
+        format!(
+            "{BASH_RISK}   PreToolUse/Bash   choice   {mode}   display={}",
+            display_name(config.display)
+        ),
+        format!("user-rules  {}", location_text(user)),
+        format!("repo-rules  {}", location_text(repo)),
+    ];
+    lines.extend(loaded.warnings.iter().map(|warning| format!("경고: {warning}")));
+    lines.join("\n")
+}
+
+fn location_text(location: &Location) -> String {
+    format!("{} ({})", location.label, if location.exists { "있음" } else { "없음" })
+}
+
+fn mode_name(mode: Mode) -> &'static str {
+    match mode {
+        Mode::Audit => "감사 모드",
+        Mode::Enforce => "enforce",
+    }
+}
+
+fn display_name(display: Display) -> &'static str {
+    match display {
+        Display::Decisions => "decisions",
+        Display::All => "all",
+        Display::Off => "off",
+    }
+}
+
+/// 설정 키 하나의 값을 사람이 읽는 문자열로 만든다.
+fn value_text(config: &Config, key: &str) -> String {
+    match key {
+        "mode" => config::to_json(config)["mode"].as_str().unwrap_or("?").to_string(),
+        "display" => display_name(config.display).to_string(),
+        "timeout_ms" => config.timeout_ms.to_string(),
+        "bash-risk.enabled" => config.bash_risk.enabled.to_string(),
+        "bash-risk.deny" => config.bash_risk.deny.to_string(),
+        "bash-risk.confidence" => config.bash_risk.confidence.to_string(),
+        "bash-risk.prefilter" => format!("{}개", config.bash_risk.prefilter.len()),
+        _ => "?".to_string(),
+    }
+}
+
+/// `decide gate --show <이름>`: 게이트 하나의 질문, 선택지, 임계값, 모드, 사전 필터와 값마다의 출처.
+/// `json`이면 같은 내용을 JSON으로 낸다(`config`는 설정 파일에 그대로 복사할 수 있는 모양이다).
+/// 알 수 없는 게이트 이름이면 `None`이다.
+pub fn show_gate(loaded: &Loaded, name: &str, json: bool) -> Option<String> {
+    if name != BASH_RISK {
+        return None;
+    }
+    let config = &loaded.config;
+    if json {
+        let options: serde_json::Map<String, Value> = OPTIONS
+            .iter()
+            .map(|(label, meaning)| (label.to_string(), Value::String(meaning.to_string())))
+            .collect();
+        let sources: serde_json::Map<String, Value> = loaded
+            .sources
+            .iter()
+            .map(|(key, source)| (key.clone(), Value::String(config::source_label(*source).to_string())))
+            .collect();
+        let value = json!({
+            "gate": BASH_RISK,
+            "event": "PreToolUse",
+            "matcher": "Bash",
+            "type": "choice",
+            "question": QUESTION,
+            "options": options,
+            "state": ["command", "cwd_tail"],
+            "config": config::to_json(config),
+            "sources": sources,
+            "warnings": loaded.warnings,
+        });
+        return serde_json::to_string_pretty(&value).ok();
+    }
+    let mut lines = vec![
+        "이벤트:   PreToolUse (matcher: Bash)".to_string(),
+        "타입:     choice".to_string(),
+        format!("질문:     {QUESTION}"),
+    ];
+    for (index, (label, meaning)) in OPTIONS.iter().enumerate() {
+        let head = if index == 0 { "선택지:   " } else { "          " };
+        lines.push(format!("{head}{label:<5} — {meaning}"));
+    }
+    lines.push("state:    명령(비밀값을 가린 뒤 2000자까지), 작업 디렉터리 끝 두 단계".to_string());
+    lines.push(format!(
+        "임계값:   deny ≥ {:.2}, 최고 확률 < {:.2}이면 ask",
+        config.bash_risk.deny, config.bash_risk.confidence
+    ));
+    lines.push(format!("모드:     {}", value_text(config, "mode")));
+    lines.push(format!(
+        "사전 필터: {} ({}개)",
+        config.bash_risk.prefilter.join(", "),
+        config.bash_risk.prefilter.len()
+    ));
+    lines.push("값과 출처:".to_string());
+    for key in config::KEYS {
+        let source = loaded.sources.get(key).copied().unwrap_or(config::Source::Builtin);
+        lines.push(format!("  {key} = {} ({})", value_text(config, key), config::source_label(source)));
+    }
+    if !loaded.warnings.is_empty() {
+        lines.push("경고:".to_string());
+        lines.extend(loaded.warnings.iter().map(|warning| format!("  {warning}")));
+    }
+    Some(lines.join("\n"))
 }
 
 /// 훅이 stdout으로 내보낼 JSON. 내보낼 것이 없으면 `None`이다.
@@ -243,6 +363,86 @@ mod tests {
             result: json!({"routing": {"backend": "typesafe", "model": "jev-1.13.0", "cached": true}, "latency_ms": 0.0}),
         };
         assert!(message(&hook_output(&outcome)).ends_with("typesafe · jev-1.13.0 · (캐시)"));
+    }
+
+    fn locations(user: bool, repo: bool) -> (Location, Location) {
+        (
+            Location { label: "~/.config/decide/gates.json".into(), exists: user },
+            Location { label: "./.decide/gates.json".into(), exists: repo },
+        )
+    }
+
+    #[test]
+    fn the_overview_lists_the_gate_and_where_its_settings_would_come_from() {
+        let (user, repo) = locations(false, false);
+        let text = show_overview(&crate::gate::config::load(None, None), &user, &repo);
+        assert_eq!(
+            text,
+            "bash-risk   PreToolUse/Bash   choice   감사 모드   display=decisions\nuser-rules  ~/.config/decide/gates.json (없음)\nrepo-rules  ./.decide/gates.json (없음)"
+        );
+    }
+
+    #[test]
+    fn the_overview_shows_enforce_disabled_and_present_files_and_warnings() {
+        let (user, repo) = locations(true, true);
+        let loaded = crate::gate::config::load(
+            Some(r#"{"mode": "enforce", "display": "all"}"#),
+            Some(r#"{"gates": {"bash-risk": {"enabled": false}}, "timeout_ms": 5}"#),
+        );
+        let text = show_overview(&loaded, &user, &repo);
+        assert!(text.contains("choice   enforce   display=all"), "{text}");
+        assert!(text.contains("user-rules  ~/.config/decide/gates.json (있음)"), "{text}");
+        assert!(text.contains("repo-rules  ./.decide/gates.json (있음)"), "{text}");
+        assert!(text.contains("경고: 저장소 설정: timeout_ms"), "{text}");
+        let off = crate::gate::config::load(Some(r#"{"gates": {"bash-risk": {"enabled": false}}}"#), None);
+        assert!(show_overview(&off, &user, &repo).contains("choice   꺼짐"), "꺼진 게이트는 모드 칸에 꺼짐");
+    }
+
+    #[test]
+    fn the_gate_detail_shows_the_question_options_thresholds_and_sources() {
+        let loaded = crate::gate::config::load(Some(r#"{"gates": {"bash-risk": {"thresholds": {"deny": 0.8}}}}"#), None);
+        let text = show_gate(&loaded, "bash-risk", false).unwrap();
+        for line in [
+            "이벤트:   PreToolUse (matcher: Bash)",
+            "타입:     choice",
+            &format!("질문:     {QUESTION}"),
+            "선택지:   allow — 저장소 안 작업이거나 읽기 전용",
+            "          ask   — 영향 범위가 불분명함",
+            "          deny  — 저장소 밖을 지우거나 되돌리기 어렵게 바꿈",
+            "임계값:   deny ≥ 0.80, 최고 확률 < 0.70이면 ask",
+            "모드:     audit",
+        ] {
+            assert!(text.contains(line), "{line:?}가 없다:\n{text}");
+        }
+        assert!(text.contains("사전 필터: git status, git diff"), "{text}");
+        assert!(text.contains("(12개)"), "{text}");
+        assert!(text.contains("bash-risk.deny = 0.8 (사용자)"), "{text}");
+        assert!(text.contains("mode = audit (내장 기본값)"), "{text}");
+    }
+
+    #[test]
+    fn the_gate_detail_as_json_has_a_config_that_can_be_copied_into_a_settings_file() {
+        let loaded = crate::gate::config::load(Some(r#"{"mode": "enforce"}"#), None);
+        let text = show_gate(&loaded, "bash-risk", true).unwrap();
+        let value: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["gate"], "bash-risk");
+        assert_eq!(value["event"], "PreToolUse");
+        assert_eq!(value["matcher"], "Bash");
+        assert_eq!(value["type"], "choice");
+        assert_eq!(value["question"], QUESTION);
+        assert_eq!(value["options"]["deny"], "저장소 밖을 지우거나 되돌리기 어렵게 바꿈");
+        assert_eq!(value["sources"]["mode"], "사용자");
+        assert_eq!(value["sources"]["display"], "내장 기본값");
+        let reloaded = crate::gate::config::load(Some(&value["config"].to_string()), None);
+        assert_eq!(reloaded.config, loaded.config, "config를 그대로 복사하면 같은 설정이어야 한다");
+        assert!(reloaded.warnings.is_empty(), "{:?}", reloaded.warnings);
+    }
+
+    #[test]
+    fn an_unknown_gate_name_has_no_detail() {
+        let loaded = crate::gate::config::load(None, None);
+        assert!(show_gate(&loaded, "no-such-gate", false).is_none());
+        assert!(show_gate(&loaded, "no-such-gate", true).is_none());
     }
 
     #[test]

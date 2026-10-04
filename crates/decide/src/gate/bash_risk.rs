@@ -137,7 +137,7 @@ pub fn cwd_tail(cwd: &str) -> String {
     names[names.len().saturating_sub(2)..].join("/")
 }
 
-fn clip(text: &str, max_chars: usize) -> String {
+pub(crate) fn clip(text: &str, max_chars: usize) -> String {
     if text.chars().count() <= max_chars {
         return text.to_string();
     }

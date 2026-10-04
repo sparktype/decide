@@ -60,3 +60,11 @@
 - 결정: 시간 초과는 데몬을 다시 띄우지 않는다(데몬은 살아 있고 모델을 읽는 중일 수 있다). 감사 로그는 `~/.cache/decide/gate.log`에 JSON 한 줄씩 덧붙인다.
 - 사실: macOS 유닉스 소켓 경로는 약 104바이트가 한계다(`path must be shorter than SUN_LEN`). 임시 디렉터리 기본 경로(`/var/folders/…/T/`)가 이미 49자라 테스트 디렉터리 이름을 짧게 써야 한다. 7단계 CLI 통합 테스트의 `HOME` 경로도 같다.
 - 사실: 침묵하는 가짜 데몬이 연결을 바로 닫으면 클라이언트는 타임아웃이 아니라 EOF(`Invalid`)를 본다. 타임아웃 테스트는 연결을 열어 둔 채 기다리게 했다.
+
+## 2026-10-04 (7단계 완료)
+- 결정: `gate::run_hook(name, stdin, ctx, spawn) -> Option<Value>`가 전체 흐름이다. 알 수 없는 게이트·깨진 JSON·Bash 아닌 도구·PreToolUse가 아닌 이벤트는 `None`(아무것도 안 내고 아무것도 안 건드림), 설정이 꺼져 있어도 `None`이다. 사전 필터는 데몬을 부르지도 띄우지도 않는다. 판정마다 감사 로그 한 줄(ts, gate, mode, verdict, probs, backend, model, latency_ms, prefiltered, failure, 가린 명령 200자, cwd 끝)을 남기고, 로그를 못 써도 판정은 계속한다.
+- 결정: 저장소 설정은 훅 입력의 `cwd`에서 찾고(`<cwd>/.decide/gates.json`), 없으면 프로세스 현재 디렉터리다. 훅은 Claude Code가 띄운 프로젝트 디렉터리 기준이라 입력의 `cwd`가 맞다.
+- 결정: CLI는 `decide gate <이름>`과 `decide gate --show [이름] [--json]`이다. 알 수 없는 게이트 이름은 훅에서는 종료 코드 1(stderr 설명, 비차단 오류라 설정 오타가 조용히 묻히지 않음), `--show`에서는 2다. 훅 종료 코드 2는 Claude Code가 차단으로 해석하므로 쓰지 않는다. `--json`은 게이트 이름과 함께만 쓴다.
+- 결정: `--show`는 개요(게이트·모드·표시·설정 파일 위치와 있음/없음·경고)와 상세(질문, 선택지 의미, 임계값, 모드, 사전 필터, 값마다 출처)를 낸다. `--json`의 `config`는 설정 파일에 그대로 복사할 수 있고 로더를 거쳐 같은 값이 됨을 테스트로 고정했다(`config::to_json`).
+- 사실: 통합 테스트(`tests/gate.rs`)는 가짜 데몬 소켓을 `$HOME/.cache/decide/decide.sock`에 두고 바이너리를 실행한다. 데몬이 꺼진 경우는 실제 `decide daemon`을 띄워 프로세스를 남기므로 단위 테스트(주입한 spawn)로만 검증한다.
+- 교훈: 가짜 데몬이 `accept()`에서 무한 대기하면 회귀 때 테스트가 영원히 멈춘다(빨강 단계에서 600초 타임아웃을 겪음). 통합 테스트의 가짜 데몬은 5초 안에 연결이 없으면 실패하게 했다.

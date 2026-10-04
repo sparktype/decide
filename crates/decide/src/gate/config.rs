@@ -98,6 +98,40 @@ pub fn load(user: Option<&str>, repo: Option<&str>) -> Loaded {
     loaded
 }
 
+/// 설정을 설정 파일과 같은 모양의 JSON으로 되돌린다. `load`가 이 JSON을 읽으면 같은 값이 된다.
+pub fn to_json(config: &Config) -> Value {
+    let mode = match config.mode {
+        Mode::Audit => "audit",
+        Mode::Enforce => "enforce",
+    };
+    let display = match config.display {
+        Display::Decisions => "decisions",
+        Display::All => "all",
+        Display::Off => "off",
+    };
+    serde_json::json!({
+        "mode": mode,
+        "display": display,
+        "timeout_ms": config.timeout_ms,
+        "gates": {
+            BASH_RISK: {
+                "enabled": config.bash_risk.enabled,
+                "thresholds": {"deny": config.bash_risk.deny, "confidence": config.bash_risk.confidence},
+                "prefilter": config.bash_risk.prefilter,
+            }
+        }
+    })
+}
+
+/// 출처의 사람이 읽는 이름.
+pub fn source_label(source: Source) -> &'static str {
+    match source {
+        Source::Builtin => "내장 기본값",
+        Source::User => "사용자",
+        Source::Repo => "저장소",
+    }
+}
+
 /// 사용자 설정(`~/.config/decide/gates.json`, HOME이 없거나 비면 없음)과 저장소 설정(`<cwd>/.decide/gates.json`) 경로.
 pub fn config_paths(home: Option<&str>, cwd: &Path) -> (Option<PathBuf>, PathBuf) {
     let user = home
@@ -408,6 +442,26 @@ mod tests {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn to_json_round_trips_through_the_loader() {
+        // `--show --json`이 낸 설정을 그대로 설정 파일로 복사해도 같은 값이 되어야 한다.
+        let user = r#"{"mode": "enforce", "display": "all", "timeout_ms": 3000, "gates": {"bash-risk": {
+            "enabled": true, "thresholds": {"deny": 0.6, "confidence": 0.8}, "prefilter": ["ls", "pwd"]}}}"#;
+        let first = loaded(Some(user), None).config;
+        let text = to_json(&first).to_string();
+        let second = loaded(Some(&text), None).config;
+        assert_eq!(first, second);
+        assert_eq!(to_json(&builtin())["gates"]["bash-risk"]["thresholds"]["deny"], 0.5);
+        assert_eq!(to_json(&builtin())["mode"], "audit");
+        assert_eq!(to_json(&builtin())["display"], "decisions");
+    }
+
+    #[test]
+    fn source_labels_are_korean_and_distinct() {
+        let labels = [Source::Builtin, Source::User, Source::Repo].map(source_label);
+        assert_eq!(labels, ["내장 기본값", "사용자", "저장소"]);
     }
 
     #[test]
