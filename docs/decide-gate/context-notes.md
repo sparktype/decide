@@ -52,3 +52,11 @@
 - 결정: 표시 규칙은 `Off`면 문구 없음(enforce 결정은 문구 없이도 낸다), `Decisions`면 Ask/Deny와 실패만, `All`이면 사전 필터와 allow까지다.
 - 결정: 근거 문구는 설계서 형식 그대로이고 푸터는 `show::footer`를 재사용한다(캐시 표시 포함). 확률은 큰 순으로 정렬하되 동률이면 deny, ask, allow 순이다. 대상은 `show::truncate`로 80자에서 자른다. 설정 경고가 있으면 마지막에 "설정 경고 n건"을 한 줄 붙인다.
 - 사실: `show.rs`의 알려진 한계(로컬 score의 `legend`가 배열이면 요약이 조용히 사라짐)를 고쳤다. 객체(TypeSafe)와 배열(로컬) 둘 다 읽는다. `truncate`, `pct`, `footer`는 `pub(crate)`로 열었다.
+
+## 2026-10-04 (6단계 완료)
+- 결정: `gate/client.rs`는 입출력만 맡는다. `ask(socket, request, timeout)`은 `AskError`(Down/Stale/Timeout/Backend/Invalid)로 실패를 구분하고, `ask_or_start`가 Down과 Stale일 때 새 데몬을 띄우되 이번 요청은 `Err(이유)`로 돌려줘 호출자가 판정 없이 통과시킨다.
+- 결정: stale 데몬은 응답 뒤 스스로 끝나므로 `wait_gone`으로 소켓이 닫히기를 최대 1초 기다린 뒤 띄운다. 기다리지 않으면 새 데몬이 `claim_socket`에서 살아 있는 옛 소켓을 보고 "이미 실행 중"으로 물러나 데몬이 아예 없어진다.
+- 결정: 데몬 띄우기(`spawn_daemon`)는 `current_exe daemon`을 입출력 없이 별도 프로세스 그룹으로 띄우고 환경을 그대로 물려준다. 테스트가 프로세스를 만들지 않도록 `ask_or_start`는 spawn을 클로저로 받는다.
+- 결정: 시간 초과는 데몬을 다시 띄우지 않는다(데몬은 살아 있고 모델을 읽는 중일 수 있다). 감사 로그는 `~/.cache/decide/gate.log`에 JSON 한 줄씩 덧붙인다.
+- 사실: macOS 유닉스 소켓 경로는 약 104바이트가 한계다(`path must be shorter than SUN_LEN`). 임시 디렉터리 기본 경로(`/var/folders/…/T/`)가 이미 49자라 테스트 디렉터리 이름을 짧게 써야 한다. 7단계 CLI 통합 테스트의 `HOME` 경로도 같다.
+- 사실: 침묵하는 가짜 데몬이 연결을 바로 닫으면 클라이언트는 타임아웃이 아니라 EOF(`Invalid`)를 본다. 타임아웃 테스트는 연결을 열어 둔 채 기다리게 했다.

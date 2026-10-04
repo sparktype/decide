@@ -10,7 +10,7 @@
 - [x] 3. 게이트 설정(내장 기본값, 층 병합, 출처 추적, 파일 읽기: `gate/config.rs`)
 - [x] 4. bash-risk 순수 로직(가리기, state, 사전 필터, 판정)
 - [x] 5. 출력(훅 JSON, 근거 표시 문구, 실패 시 통과) + show.rs legend 배열 수정(`gate/output.rs`, show.rs legend 배열 지원 포함)
-- [ ] 6. 클라이언트(소켓, 데몬 띄우기, stale, 감사 로그)
+- [x] 6. 클라이언트(소켓, 데몬 띄우기, stale, 감사 로그)(`gate/client.rs`)
 - [ ] 7. CLI 연결(`gate <이름>`, `gate --show [이름] [--json]`)
 - [ ] 8. `decide install --claude`가 PreToolUse 게이트 훅 등록
 - [ ] 9. 평가 세트(개발용/검증용 분리, `#[ignore]`)
