@@ -13,6 +13,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # macos-14의 기본 Xcode 15.4(Metal 3.1 컴파일러)는 MLX 커널이 쓰는 metal::remove_addrspace_t가
+      # 없어 컴파일에 실패한다. 같은 러너에 깔린 Xcode 16 계열 중 가장 높은 것을 고른다. 러너 OS는
+      # 그대로 14라 MLX가 Sonoma용 metallib를 만든다.
+      - name: Select Xcode 16
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_16*.app | sort -V | tail -1)
+          sudo xcode-select -s "$XCODE/Contents/Developer"
+          xcodebuild -version
+
       # mlx-rs가 MLX C++와 Metal 커널을 컴파일한다. Metal 컴파일러가 없으면(Xcode 26 이후는
       # 별도 컴포넌트) 내려받고, cmake가 없으면 설치한다.
       - name: Metal toolchain and cmake
