@@ -13,7 +13,7 @@
 - [x] 6. 클라이언트(소켓, 데몬 띄우기, stale, 감사 로그)(`gate/client.rs`)
 - [x] 7. CLI 연결(`gate <이름>`, `gate --show [이름] [--json]`)(`gate::run_hook`, `decide gate`, `--show`, `tests/gate.rs`)
 - [x] 8. `decide install --claude`가 PreToolUse 게이트 훅 등록(`hook_specs`, `gate_command`)
-- [ ] 9. 평가 세트(개발용/검증용 분리, `#[ignore]`)
+- [x] 9. 평가 세트(개발용/검증용 분리, `#[ignore]`)(개발용 정답 22/30, 위험 명령 놓침 0건, 정상→deny 1건으로 enforce 조건 미충족. 검증용은 임계값 결정 뒤 한 번)
 - [ ] 10. README와 CLAUDE.md 갱신
 - [ ] 11. 전체 테스트, 수동 실행·지연 측정, 감사 모드 시범 운영
 - [ ] 릴리스(0.3.0)는 별도 PR
