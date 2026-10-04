@@ -29,3 +29,11 @@
 - 사실(기존 결함 발견): `daemon::tests::line_protocol_returns_one_json_object`는 로컬 백엔드를 부르면서 `CLEF_WEIGHTS` 보호 장치가 없어, 이 테스트만 단독 실행하면 실제로 HuggingFace에서 약 10GB를 내려받는다(244초). 전체 스위트에서는 `runtime()`의 `OnceLock`이 다른 테스트의 보호 장치 에러를 캐시해서 가려져 있었다. backend.rs 테스트와 같은 방식으로 없는 디렉터리를 가리키게 고쳤다(0.31초).
 - 사실: 위 단독 실행 때문에 `~/.cache/huggingface/hub/models--mlx-community--clef-flash-8bit`(약 10GB)가 생겼다. `CLEF_WEIGHTS` 없이 설치본(`/opt/homebrew/bin/decide`)을 쓸 때 바로 쓰이는 캐시라 지우지 않았다. 로컬 `~/.cache/decide/clef-flash-8bit`와 같은 내용이라 필요 없으면 한쪽을 지워도 된다.
 - 알려진 취약점(이번 범위 밖): 테스트들이 `CLEF_WEIGHTS`를 `set_var`/`remove_var`로 만지는 방식은 병렬 실행에서 경쟁 조건이 있다. 지금은 `OnceLock`이 첫 에러를 캐시해서 드러나지 않을 뿐이다.
+
+## 2026-10-04 (3단계 완료)
+- 결정: `gate::config::load(user, repo)`는 텍스트를 받는 순수 함수이고 `load_from_disk(home, cwd)`가 파일을 읽는 얇은 래퍼다. `Loaded { config, sources, warnings }`를 돌려줘 `--show`가 값마다 출처(내장/사용자/저장소)를, 무시한 항목의 경고를 보일 수 있다.
+- 결정: 저장소 층이 조일 수 있는 것은 mode(audit→enforce), enabled(꺼짐→켜짐), thresholds.deny(낮추기), thresholds.confidence(올리기), prefilter(줄이기)다. display와 timeout_ms는 저장소가 못 바꾼다(사용자 취향과 성능 문제라 보안 방향이 없다). 풀려는 값은 경고와 함께 무시한다.
+- 결정: 저장소가 이미 적용된 값과 같은 값을 쓰는 것은 풀려는 시도가 아니므로 경고도 출처 변경도 없다(테스트로 고정).
+- 결정: 잘못된 JSON 층은 통째로 건너뛰고 경고하며, 잘못된 값은 그 값만 무시하고 같은 층의 나머지는 적용한다. 알 수 없는 게이트 이름은 경고 후 무시한다.
+- 결정: 내장 사전 필터는 12개(git status/diff/log/show/branch, ls, pwd, cat, head, tail, wc, which)다. 실제 적용 규칙(파이프·`;`·`&&`·`$(`가 있으면 제외)은 4단계에서 구현한다.
+- 참고: 새 파일 첫 줄에 한국어 한 줄 역할 주석을 둔다(저장소 규칙). 전체 101개 테스트 통과, 빌드 경고 없음.

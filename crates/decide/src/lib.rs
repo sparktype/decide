@@ -1,6 +1,7 @@
 pub mod backend;
 pub mod claude;
 pub mod daemon;
+pub mod gate;
 pub mod local;
 pub mod mcp;
 pub mod protocol;
