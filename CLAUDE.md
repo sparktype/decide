@@ -121,21 +121,35 @@ or `.claude/settings.json`, restart Claude Code.
   LRU (`MAX_CACHE_ENTRIES` = 64, keyed on the parsed request plus the resolved
   backend) so identical requests within one daemon lifetime skip the transport;
   cached answers carry `routing.cached: true` and `latency_ms: 0.0`. `decide mcp`
-  is a fresh process per call and has no cache.
-- `main.rs` routes `mcp`, `daemon`, `install`, and `hook` subcommands. No arguments prints
+  is a fresh process per call and has no cache. A request may carry `client_version`;
+  when it differs from `daemon::VERSION` the daemon skips the backend, answers
+  `{"stale":true,"version":…}`, and exits, so an upgraded client never keeps talking to an old
+  daemon (`handle_request` returns `(reply, keep_serving)`). Requests without the field behave as before.
+- `main.rs` routes `mcp`, `daemon`, `install`, `hook`, and `gate` subcommands. No arguments prints
   help. `install` shells out to `claude mcp add -s user decide -- <bin> mcp`.
-- `claude.rs` merges the display hook into Claude Code's user settings for `decide install --claude`:
-  `add_hook` (pure) appends one `PostToolUse` group for `mcp__decide__decide`, idempotent on the exact
-  command, refusing shapes it cannot merge into; `install_hook` reads the file (missing = `{}`, invalid
+- `claude.rs` merges hooks into Claude Code's user settings for `decide install --claude`:
+  `add_hook_spec` (pure) appends one group for a `HookSpec` (event, matcher, command, timeout), idempotent on
+  the exact command within that event, refusing shapes it cannot merge into; `install_hooks` installs the display
+  hook (`PostToolUse`, `mcp__decide__decide`) and the gate hook (`PreToolUse`, `Bash`) in one pass
+  (`hook_specs`); it reads the file (missing = `{}`, invalid
   JSON = error without writing), backs up to `settings.json.bak-decide`, and replaces it via a temp file
   keeping permissions. Bare `decide install` stays MCP-only.
 - `show.rs` turns a `PostToolUse` hook input for `mcp__decide__decide` into a user-facing summary
   (`render(&Value) -> Option<String>`, pure). `decide hook` (`main.rs`) reads stdin, prints
   `{"systemMessage": ...}` as one JSON line, and stays silent with exit 0 on anything unreadable.
-  Known limitation (outside this plan's scope): `score_text` assumes TypeSafe's shape for
-  `legend` (an object keyed by index strings); local `score` answers use a plain array for
-  `legend`, so a local score answer piped through here silently drops the summary line
-  instead of rendering one.
+  `score_text` reads `legend` both as TypeSafe's object keyed by index strings and as the local
+  backend's plain array.
+- `gate/` runs the Claude Code hook gate behind `decide gate <name>` (design:
+  `docs/superpowers/specs/2026-10-04-decide-gate-design.md`, plan and decision notes in `docs/decide-gate/`).
+  `config.rs` merges built-in defaults, `~/.config/decide/gates.json`, and `<cwd>/.decide/gates.json` (the repo
+  layer may only tighten: enforce, enable, lower `deny`, raise `confidence`, shrink the prefilter; `display` and
+  `timeout_ms` are not repo-settable) and tracks each value's source for `--show`. `bash_risk.rs` holds the pure
+  logic (secret redaction, the three-way `allow`/`ask`/`deny` choice request, prefilter that never applies to
+  commands containing shell metacharacters, probabilities → verdict). `output.rs` turns an outcome into hook
+  output JSON and the reasoning shown to the user (audit mode emits `systemMessage` only and never a
+  `permissionDecision`; enforce adds `permissionDecision` for deny/ask) and renders `--show`. `client.rs`
+  talks to the daemon socket, starts or replaces a daemon, and appends `~/.cache/decide/gate.log`. Every failure
+  passes through silently with exit 0 (an unknown gate name is exit 1; exit 2 would block the tool call).
 
 `.claude/hooks/stop_verify.py` remains a stdlib client. It spawns
 `/opt/homebrew/bin/decide daemon` with the hook environment and fail-opens when the
@@ -151,4 +165,5 @@ unreliably. See the README section "에이전트가 쓸 때".
 **Tests inject the backend.** Rust tests use a scripted transport and a fake clock.
 `tests/stop_hook.rs` runs `python3` against the hook's pure logic. Keep checks that
 need real weights or a live TypeSafe key (`--features parity`, `#[ignore]` local
-inference tests) out of the default suites.
+inference tests, the `tests/gate_eval.rs` gate evaluation) out of the default suites. Unix socket
+paths are limited to about 104 bytes on macOS, so tests that bind sockets use short temp directory names.
