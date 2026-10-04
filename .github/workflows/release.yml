@@ -36,11 +36,17 @@ jobs:
       - name: Build release binary
         run: cargo build --release --manifest-path crates/decide/Cargo.toml
 
+      # MLX는 GPU 커널 묶음 mlx.metallib을 실행 파일 옆에서 먼저 찾고, 없으면 빌드 러너의 홈에 박힌
+      # 경로(/Users/runner/.mlx/lib/...)로 떨어진다. 그 경로는 사용자 머신에 없어서 압축 파일에
+      # 바이너리와 함께 넣지 않으면 추론이 전부 실패한다(v0.2.0이 그랬다).
       - name: Package
         run: |
-          mkdir -p dist
-          tar -czf "dist/decide-${{ github.ref_name }}-aarch64-apple-darwin.tar.gz" \
-            -C crates/decide/target/release decide
+          mkdir -p dist stage
+          METALLIB=$(find crates/decide/target/release -name mlx.metallib | head -1)
+          test -n "$METALLIB" || { echo "mlx.metallib을 찾을 수 없다"; exit 1; }
+          cp crates/decide/target/release/decide stage/decide
+          cp "$METALLIB" stage/mlx.metallib
+          tar -czf "dist/decide-${{ github.ref_name }}-aarch64-apple-darwin.tar.gz" -C stage decide mlx.metallib
           shasum -a 256 dist/*.tar.gz > dist/checksums.txt
 
       - name: Release
