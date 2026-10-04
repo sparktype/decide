@@ -12,22 +12,26 @@ A failed call stays on its backend. The two backends are not calibrated to each
 other. Both answer `noul` with only `type` and `noul`.
 
 The local backend runs real in-process inference — no server, no network call per
-request. It loads a Clef-flash backbone (Qwen3.5-9B hybrid attention, GGUF Q6_K,
-vendored from candle-transformers PR #3396) plus a from-scratch joint schema head.
-Both are read from `CLEF_WEIGHTS` if set (a missing file there is a hard error, no
-silent fallback) or downloaded once from HuggingFace (`prithivMLmods/clef-flash-GGUF`
-for the backbone, `Cloudflare/clef-flash` for the joint head and tokenizer) into
-`~/.cache/huggingface/hub` otherwise — the Q6_K GGUF alone is about 7.4GB, so first
-use costs real time and disk space. Local answers follow the same field shape as
-TypeSafe (`choice`/`score`/`noul` plus `confidence` and `probabilities`);
-`routing.model` is `"clef-flash"`. Design: `docs/superpowers/specs/2026-10-02-clef-flash-local-backend-design.md`.
+request. It runs the Clef-flash backbone (Qwen3.5-9B hybrid attention) on the Apple Silicon GPU
+through MLX: `mlx-community/clef-flash-8bit` (8-bit affine, about 10.7GB), via `mlx-rs` and a Metal
+gated-delta kernel through `mlx-sys` (`local/mlx_backbone.rs`), plus a from-scratch joint schema head that
+runs on candle CPU. Weights are read from `CLEF_WEIGHTS` if set (a missing file there is a hard error, no
+silent fallback; the directory must hold that repo's `config.json`, `model.safetensors.index.json`, shards,
+and `joint_head.safetensors`) or downloaded once from HuggingFace (`mlx-community/clef-flash-8bit` for the
+backbone and head, `Cloudflare/clef-flash` for the tokenizer) into `~/.cache/huggingface/hub` otherwise —
+first use costs about 10.7GB of disk and real time. Building needs cmake and the Metal Toolchain
+(`xcodebuild -downloadComponent MetalToolchain`), and the binary only runs on Apple Silicon. Local answers
+follow the same field shape as TypeSafe (`choice`/`score`/`noul` plus `confidence` and `probabilities`);
+`routing.model` is `"clef-flash"`. Design: `docs/mlx-backend/` (plan, checklist, decision notes) and
+`docs/superpowers/specs/2026-10-02-clef-flash-local-backend-design.md` (the earlier CPU/GGUF design, kept
+as history; that engine has since been removed).
 
-On a 5-case golden set, Q6_K agrees qualitatively with the real BF16
-Cloudflare/clef-flash model — compared via `scripts/clef_flash_oracle.py`, gated by
-`cargo test --features parity` — on 4/5 cases. The one disagreement is an 11-option
-choice question where even the reference model's own top-2 options differ by only
-about 0.02 probability, an inherently near-tied case rather than a wiring bug. This
-is an accepted, measured limitation of a quantized 9B model on CPU, not a bug to chase.
+Measured on an M1 Max (64GB): `cargo test --features parity` agrees with the BF16 oracle on 5/5 golden
+cases (max raw-logit diff 0.095, including an 11-option choice question whose top-2 options differ by only
+about 0.02 probability), and a warm call takes about 0.6s for ~150 tokens and 2.8s for ~900 tokens. The
+removed candle CPU path took 30s and 125s for the same inputs and agreed on 4/5. Prefill is compute-bound at
+roughly 3.6ms/token, so expect little more from kernel work on this chip. The gated-delta kernel is checked
+against an ops-based reference in a unit test.
 
 The old Python package (`src/decide/`, its `pytest` suite, `test_smoke.py`, `pyproject.toml`)
 was the comparison oracle for an earlier local backend and was deleted once that
@@ -96,11 +100,13 @@ or `.claude/settings.json`, restart Claude Code.
   and 529 once after one second. Choice above 255 options and score above 10 levels
   fail before the request.
 - `local/mod.rs` resolves weights (`CLEF_WEIGHTS` env override, else the HuggingFace
-  cache; `ensure_weights`/`download_weights`), lazily builds the backbone + joint
+  cache; `ensure_weights`/`resolve_pinned`/`download_weights`), lazily builds the backbone + joint
   head + tokenizer once per process (`runtime()`, a `OnceLock`), and exposes
   `infer` (state + question → the same answer shape as TypeSafe, via
-  `postprocess::to_answer`). `local/backbone.rs` vendors the PR #3396 Qwen3.5
-  hybrid-attention GGUF forward pass; `local/joint_head.rs` is the from-scratch
+  `postprocess::to_answer`). `local/mlx_backbone.rs` is the MLX port of the Qwen3.5
+  hybrid-attention forward pass (full attention plus a gated-delta Metal kernel); it hands the
+  head the hidden states and only the option tokens' dequantized lm_head rows (`head_inputs`).
+  `local/joint_head.rs` is the from-scratch
   schema head (EvidenceRoutingLayer × 2 + TransformerDecoderLayer × 4);
   `local/tokenizer.rs` assembles the Clef schema text and token spans.
   `backend::decide`/`decide_many` call `local::infer` directly — no transport,

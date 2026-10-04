@@ -304,7 +304,7 @@ impl JointHead {
             .map_err(|err| format!("joint_head 레이어 구성에 실패했습니다: {err}"))
     }
 
-    fn char_span_to_token_span(
+    pub(super) fn char_span_to_token_span(
         token_offsets: &[(usize, usize)],
         start_char: usize,
         end_char: usize,

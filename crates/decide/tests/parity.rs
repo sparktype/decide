@@ -1,12 +1,12 @@
 #![cfg(feature = "parity")]
-// Rust local 백엔드(백본 GGUF 역양자화 + joint_head F32)가 Cloudflare/clef-flash
+// Rust local 백엔드(백본 MLX 8비트 + joint_head F32)가 Cloudflare/clef-flash
 // 원본 PyTorch 구현(F32로 돌린 오라클, `scripts/clef_flash_oracle.py`가 생성한
 // `tests/parity_fixtures/golden.json`)과 같은 입력에 대해 "같은 질적 판단"을
 // 내리는지 확인한다.
 //
 // 가중치가 로컬에 없으면(CLEF_WEIGHTS 미설정 + HF 캐시에도 없음) 이 테스트는
-// 실행 중 자동으로 다운로드를 시도한다 — `local::ensure_weights()`가 그대로
-// 쓰인다.
+// 실행 중 자동으로 다운로드를 시도한다 — `local::ensure_weights()`가 MLX 체크포인트
+// (`mlx-community/clef-flash-8bit`)를 받는다.
 //
 // 리뷰에서 발견된 버그(fix round 1/5): 원시 로짓 공간에서 `TOLERANCE`를
 // 두고 "거리가 가까우면 통과"로 판정했었는데, 이 설계는 noul처럼 옵션이
