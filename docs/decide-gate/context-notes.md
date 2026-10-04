@@ -37,3 +37,11 @@
 - 결정: 잘못된 JSON 층은 통째로 건너뛰고 경고하며, 잘못된 값은 그 값만 무시하고 같은 층의 나머지는 적용한다. 알 수 없는 게이트 이름은 경고 후 무시한다.
 - 결정: 내장 사전 필터는 12개(git status/diff/log/show/branch, ls, pwd, cat, head, tail, wc, which)다. 실제 적용 규칙(파이프·`;`·`&&`·`$(`가 있으면 제외)은 4단계에서 구현한다.
 - 참고: 새 파일 첫 줄에 한국어 한 줄 역할 주석을 둔다(저장소 규칙). 전체 101개 테스트 통과, 빌드 경고 없음.
+
+## 2026-10-04 (4단계 완료)
+- 결정: `gate/bash_risk.rs`는 순수 함수 모음이다(`from_hook`, `redact`, `cwd_tail`, `request`, `prefiltered`, `probs_from`, `judge`). 외부 크레이트 없이 단어 단위로 비밀값을 가린다(정규식 의존성을 늘리지 않음).
+- 결정: 비밀값 가리기 규칙은 이름에 KEY/TOKEN/SECRET/PASSWORD/PASSWD/CREDENTIAL/AUTH가 든 `NAME=값`, `--password/--token/--secret/--api-key/--apikey/--auth/Bearer` 다음 단어, `scheme://user:pw@host`, 알려진 토큰 접두어(sk-, ghp_ 등, AKIA)다. `mkdir -p`처럼 일반 명령은 건드리지 않는 것을 테스트로 고정했다. 이름에 AUTH가 든 `GIT_AUTHOR_NAME` 같은 값은 과하게 가려질 수 있지만 무해하다.
+- 결정: 사전 필터는 항목으로 시작하고(단어 경계) `; & | ` $ < > ( ) \` 개행이 하나도 없을 때만 참이다. 따라서 `ls; rm -rf /`, `ls | xargs rm`, `cat a > /etc/hosts`, `ls $(…)`은 필터를 통과하지 못하고 모델로 간다.
+- 결정: 판정은 `deny` 확률 ≥ deny 임계값이면 Deny, 최고 확률 < confidence면 Ask, 아니면 최고 선택지이며 동률이면 더 엄격한 쪽이다. 경계값 0.5와 0.7을 테스트로 고정했다.
+- 결정: 선택지 의미는 모델에 라벨만 가므로 질문 문장 뒤에 "선택지 — allow: …/ask: …/deny: …"로 같이 넣는다. 요청 state는 가린 명령(2000자 상한)과 cwd 끝 두 단계다.
+- 참고: 의도적으로 "cat 같은 읽기 명령은 사전 필터 통과"다. 민감 파일을 읽는 것은 이 게이트의 질문(파괴·되돌리기 어려운 변경) 범위가 아니다.
