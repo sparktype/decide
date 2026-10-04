@@ -83,8 +83,12 @@ Daemon socket `~/.cache/decide/decide.sock`, 30 minutes idle:
 /opt/homebrew/bin/decide daemon
 ```
 
-`decide mcp` is the stdio MCP server. Running `decide` with no arguments or `--help`
-prints the help text and exits without starting anything. After editing `.mcp.json`
+`decide mcp` is the stdio MCP server. The command line follows the usual conventions (`src/help.rs`
+owns every help text and keeps the command list in one place): `-h`/`--help` or no arguments print the
+overview, `<command> --help` and `help <command>` print that command's help, `-V`/`--version` print
+`decide <version>`; all of them exit 0 on stdout, and `main.rs` handles them before dispatch so `mcp --help`
+and `daemon --help` never start a server. Unknown commands and bad arguments go to stderr with exit 2.
+Help lines are kept within 80 terminal columns (Hangul counts as two) by a unit test. After editing `.mcp.json`
 or `.claude/settings.json`, restart Claude Code.
 
 ## Architecture
@@ -126,7 +130,7 @@ or `.claude/settings.json`, restart Claude Code.
   `{"stale":true,"version":…}`, and exits, so an upgraded client never keeps talking to an old
   daemon (`handle_request` returns `(reply, keep_serving)`). Requests without the field behave as before.
 - `main.rs` routes `mcp`, `daemon`, `install`, `hook`, and `gate` subcommands. No arguments prints
-  help. `install` shells out to `claude mcp add -s user decide -- <bin> mcp`.
+  help (see `help.rs`). `install` shells out to `claude mcp add -s user decide -- <bin> mcp`.
 - `claude.rs` merges hooks into Claude Code's user settings for `decide install --claude`:
   `add_hook_spec` (pure) appends one group for a `HookSpec` (event, matcher, command, timeout), idempotent on
   the exact command within that event, refusing shapes it cannot merge into; `install_hooks` installs the display
