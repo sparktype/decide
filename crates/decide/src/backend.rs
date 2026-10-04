@@ -247,8 +247,26 @@ mod tests {
     // `local::infer`를 직접 호출한다 — 가중치 유무에 따라 성공/실패가
     // 환경마다 다르므로 그 결과는 단정하지 않고, TypeSafe transport가
     // 호출되지 않았다는 것만 검사한다.
+    // CLEF_WEIGHTS를 존재하지 않는 디렉터리로 고정해 ensure_weights()가
+    // 네트워크 다운로드 없이 즉시 하드 에러를 내게 한다 — CI 환경처럼
+    // CLEF_WEIGHTS도 가중치 캐시도 없는 곳에서 로컬 테스트가 실제로
+    // HuggingFace에서 수 GB를 받으려다 몇 시간씩 멈추는 것을 막는다.
+    fn no_weights_env_guard() -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "clef-weights-no-weights-{}-{nanos}",
+            std::process::id()
+        ));
+        std::env::set_var("CLEF_WEIGHTS", &dir);
+        dir
+    }
+
     #[test]
     fn local_backend_does_not_call_typesafe() {
+        no_weights_env_guard();
         let mut script = Script {
             responses: vec![],
             calls: Cell::new(0),
@@ -262,11 +280,13 @@ mod tests {
                 panic!("로컬은 호출하지 않는다");
             },
         );
+        std::env::remove_var("CLEF_WEIGHTS");
         assert_eq!(script.calls.get(), 0);
     }
 
     #[test]
     fn local_skips_the_typesafe_option_limit_but_typesafe_checks_first() {
+        no_weights_env_guard();
         let mut options = Vec::new();
         for i in 0..256 {
             options.push(i.to_string());
@@ -282,6 +302,7 @@ mod tests {
             calls: Cell::new(0),
         };
         let err = decide(&raw, &env(Some("local"), None), &mut script, || 0.0, || {});
+        std::env::remove_var("CLEF_WEIGHTS");
         assert_ne!(err.unwrap_err(), typesafe::CHOICE_LIMIT);
         assert_eq!(script.calls.get(), 0);
 
@@ -423,7 +444,9 @@ mod tests {
             responses: vec![],
             calls: Cell::new(0),
         };
+        no_weights_env_guard();
         let err = decide_many(&raw, &env(Some("local"), None), &mut script, || 0.0, || {});
+        std::env::remove_var("CLEF_WEIGHTS");
         assert_ne!(
             err.unwrap_err(),
             format!("질문 \"big\": {}", typesafe::CHOICE_LIMIT)
@@ -433,6 +456,7 @@ mod tests {
 
     #[test]
     fn many_local_does_not_call_typesafe_and_typesafe_fails_entirely_on_missing_answer() {
+        no_weights_env_guard();
         let mut local_script = Script {
             responses: vec![],
             calls: Cell::new(0),
@@ -444,6 +468,7 @@ mod tests {
             || 0.0,
             || panic!("재시도하면 안 된다"),
         );
+        std::env::remove_var("CLEF_WEIGHTS");
         assert_eq!(local_script.calls.get(), 0);
 
         let mut partial = ok_script(
