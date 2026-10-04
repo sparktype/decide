@@ -52,7 +52,7 @@ brew install sparktype/tap/decide
 ```
 
 The published formula is `Formula/decide.rb` in `sparktype/homebrew-tap`. This repo's
-`packaging/homebrew/decide.rb` records the same install. Version is 0.0.6. GitHub
+`packaging/homebrew/decide.rb` records the same install. Version is 0.2.0. GitHub
 Actions builds `crates/decide` and uploads a release asset when a `v*` tag is pushed;
 the formula downloads that prebuilt arm64 binary and installs it, no Rust toolchain
 required at install time. The API key stays in the environment as `TYPESAFE_API_KEY`.
