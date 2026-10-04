@@ -22,6 +22,15 @@ use costs real time and disk space. Local answers follow the same field shape as
 TypeSafe (`choice`/`score`/`noul` plus `confidence` and `probabilities`);
 `routing.model` is `"clef-flash"`. Design: `docs/superpowers/specs/2026-10-02-clef-flash-local-backend-design.md`.
 
+An opt-in MLX engine replaces only the backbone. Build with `cargo build --release --features mlx`
+(needs cmake and the Metal Toolchain: `xcodebuild -downloadComponent MetalToolchain`). Then the local backend
+runs `mlx-community/clef-flash-8bit` (8-bit affine, about 10.7GB) on the GPU through `mlx-rs`
+(`local/mlx_backbone.rs`); `DECIDE_LOCAL_ENGINE=candle` goes back to the GGUF CPU path, and the default build
+has no MLX at all. The joint head, tokenizer, and postprocess are shared and stay on candle CPU. `CLEF_WEIGHTS`
+must then point at a directory holding that repo's `config.json`, `model.safetensors.index.json`, shards, and
+`joint_head.safetensors`. The MLX path is implemented and unit-tested but not yet measured against the
+oracle or for latency; see `docs/mlx-backend/` for the plan, checklist, and decision notes.
+
 On a 5-case golden set, Q6_K agrees qualitatively with the real BF16
 Cloudflare/clef-flash model — compared via `scripts/clef_flash_oracle.py`, gated by
 `cargo test --features parity` — on 4/5 cases. The one disagreement is an 11-option

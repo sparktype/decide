@@ -1,5 +1,7 @@
 mod backbone;
 mod joint_head;
+#[cfg(feature = "mlx")]
+mod mlx_backbone;
 mod postprocess;
 // parity 테스트(`crates/decide/tests/parity.rs`)가 `decide::local::tokenizer::spans`로
 // 실제 토큰 스팬을 검증해야 하므로 `pub`으로 재노출한다.
@@ -36,27 +38,102 @@ pub fn weights_dir() -> Result<PathBuf, String> {
         .join("hub"))
 }
 
+/// 백본 추론 엔진. `mlx` 기능으로 컴파일했으면 기본이 MLX(GPU, 8비트)이고,
+/// `DECIDE_LOCAL_ENGINE=candle`이면 candle CPU(GGUF Q6_K)를 쓴다. 헤드·토크나이저는 공통이다.
+enum Engine {
+    Candle(Mutex<backbone::Backbone>),
+    #[cfg(feature = "mlx")]
+    Mlx(Mutex<mlx_backbone::MlxBackbone>),
+}
+
 struct Runtime {
-    backbone: Mutex<backbone::Backbone>,
+    engine: Engine,
     joint_head: joint_head::JointHead,
     tokenizer: LocalTokenizer,
 }
 
 static RUNTIME: OnceLock<Result<Runtime, String>> = OnceLock::new();
 
+/// `DECIDE_LOCAL_ENGINE`가 `mlx`로 명시됐는데 이 빌드에 MLX가 없으면 에러, 아니면 선택 결과.
+fn use_mlx() -> Result<bool, String> {
+    let requested = std::env::var("DECIDE_LOCAL_ENGINE").unwrap_or_default();
+    let requested = requested.trim();
+    match requested {
+        "" | "candle" | "mlx" => {}
+        other => return Err(format!("DECIDE_LOCAL_ENGINE={other}는 알 수 없는 값입니다 (mlx 또는 candle)")),
+    }
+    if cfg!(feature = "mlx") {
+        Ok(requested != "candle")
+    } else if requested == "mlx" {
+        Err("이 바이너리는 mlx 기능 없이 컴파일되었습니다 (cargo build --features mlx)".to_string())
+    } else {
+        Ok(false)
+    }
+}
+
 fn runtime() -> &'static Result<Runtime, String> {
     RUNTIME.get_or_init(|| {
+        #[cfg(feature = "mlx")]
+        if use_mlx()? {
+            let (files, head_path) = ensure_mlx_weights()?;
+            let backbone = mlx_backbone::MlxBackbone::load(&files)?;
+            let joint_head = joint_head::JointHead::load(&head_path, backbone.hidden_size())?;
+            return Ok(Runtime {
+                engine: Engine::Mlx(Mutex::new(backbone)),
+                joint_head,
+                tokenizer: LocalTokenizer::load()?,
+            });
+        }
+        use_mlx()?;
         let (backbone_path, head_path) = ensure_weights()?;
         let backbone = backbone::Backbone::from_gguf_path(&backbone_path)?;
         let hidden_size = backbone.hidden_size();
         let joint_head = joint_head::JointHead::load(&head_path, hidden_size)?;
         let tokenizer = LocalTokenizer::load()?;
         Ok(Runtime {
-            backbone: Mutex::new(backbone),
+            engine: Engine::Candle(Mutex::new(backbone)),
             joint_head,
             tokenizer,
         })
     })
+}
+
+/// MLX 경로: 은닉 상태를 헤드가 받는 `[1, L, hidden]` 텐서로 바꾸고, 헤드가 어휘 임베딩을
+/// `input_ids`로 `index_select`하므로 옵션 구간 토큰만 dequantize한 압축 테이블과 그 테이블
+/// 기준으로 다시 매긴 `input_ids`를 만든다 — 어휘 전체(248320×hidden) f32 행렬을 만들지 않기 위해서다.
+#[cfg(feature = "mlx")]
+fn mlx_head_inputs(
+    backbone: &mlx_backbone::MlxBackbone,
+    token_ids: &[u32],
+    offsets: &[(usize, usize)],
+    option_spans: &[tokenizer::OptionSpan],
+) -> Result<(candle_core::Tensor, candle_core::Tensor, candle_core::Tensor), String> {
+    use candle_core::{Device, Tensor};
+    let device = Device::Cpu;
+    let hidden = backbone.hidden_size();
+    let flat = backbone.hidden_states(token_ids)?;
+    let hidden_states = Tensor::from_vec(flat, (1, token_ids.len(), hidden), &device).map_err(|err| err.to_string())?;
+
+    let mut compact_ids: Vec<u32> = Vec::new();
+    let mut slot_of = std::collections::HashMap::new();
+    let mut remapped = vec![0u32; token_ids.len()];
+    for span in option_spans {
+        let (start, end) = joint_head::JointHead::char_span_to_token_span(offsets, span.start_char, span.end_char);
+        for position in start..end.min(token_ids.len()) {
+            let id = token_ids[position];
+            let slot = *slot_of.entry(id).or_insert_with(|| {
+                compact_ids.push(id);
+                (compact_ids.len() - 1) as u32
+            });
+            remapped[position] = slot;
+        }
+    }
+    let rows = backbone.lexical_rows(&compact_ids)?;
+    let table = Tensor::from_vec(rows, (compact_ids.len(), hidden), &device).map_err(|err| err.to_string())?;
+    let input_ids = Tensor::new(remapped.as_slice(), &device)
+        .and_then(|t| t.unsqueeze(0))
+        .map_err(|err| err.to_string())?;
+    Ok((hidden_states, input_ids, table))
 }
 
 /// `question`에 대한 원시 로짓(softmax/sigmoid 이전), 옵션 라벨과 함께 —
@@ -73,11 +150,18 @@ fn score(runtime: &Runtime, state: &str, question: &Question) -> Result<Vec<(Str
         .map_err(|err| err.to_string())?
         .unsqueeze(0)
         .map_err(|err| err.to_string())?;
-    let (hidden_states, output_embeddings) = {
-        let mut backbone = runtime.backbone.lock().map_err(|_| "백본 락 획득에 실패했습니다".to_string())?;
-        let hidden_states = backbone.hidden_states(&input_ids)?;
-        let output_embeddings = backbone.output_embeddings().clone();
-        (hidden_states, output_embeddings)
+    let (hidden_states, input_ids, output_embeddings) = match &runtime.engine {
+        Engine::Candle(backbone) => {
+            let mut backbone = backbone.lock().map_err(|_| "백본 락 획득에 실패했습니다".to_string())?;
+            let hidden_states = backbone.hidden_states(&input_ids)?;
+            let output_embeddings = backbone.output_embeddings().clone();
+            (hidden_states, input_ids, output_embeddings)
+        }
+        #[cfg(feature = "mlx")]
+        Engine::Mlx(backbone) => {
+            let backbone = backbone.lock().map_err(|_| "백본 락 획득에 실패했습니다".to_string())?;
+            mlx_head_inputs(&backbone, &token_ids, &offsets, &option_spans)?
+        }
     };
     let question_type = tokenizer::question_type_id(question);
     runtime.joint_head.score(
@@ -165,6 +249,55 @@ fn download_weights(dir: &std::path::Path) -> Result<(PathBuf, PathBuf), String>
     std::fs::copy(&head_src, &head_dst).map_err(|err| format!("joint_head 파일 복사에 실패했습니다: {err}"))?;
 
     Ok((backbone_dst, head_dst))
+}
+
+/// MLX 8비트 체크포인트 저장소. 비전 텐서는 샤드에 섞여 있지만 읽을 때 건너뛴다.
+#[cfg(feature = "mlx")]
+const MLX_REPO: &str = "mlx-community/clef-flash-8bit";
+
+/// MLX 체크포인트 파일 위치를 정한다. `CLEF_WEIGHTS`가 있으면 그 디렉터리에서만 찾고(없으면 하드 에러),
+/// 없으면 HuggingFace 캐시로 받는다(첫 사용에 약 10GB).
+#[cfg(feature = "mlx")]
+fn ensure_mlx_weights() -> Result<(mlx_backbone::MlxFiles, PathBuf), String> {
+    const FIXED: [&str; 3] = ["config.json", "model.safetensors.index.json", "joint_head.safetensors"];
+    if clef_weights_is_set() {
+        let dir = weights_dir()?;
+        for name in FIXED {
+            if !dir.join(name).exists() {
+                return Err(format!(
+                    "CLEF_WEIGHTS={}에서 MLX 체크포인트 파일을 찾을 수 없습니다 ({})",
+                    dir.display(),
+                    FIXED.join(", ")
+                ));
+            }
+        }
+        let shards = mlx_backbone::shard_names(&dir.join("model.safetensors.index.json"))?
+            .into_iter()
+            .map(|name| dir.join(name))
+            .collect::<Vec<_>>();
+        if let Some(missing) = shards.iter().find(|path| !path.exists()) {
+            return Err(format!("CLEF_WEIGHTS에 샤드 {}가 없습니다", missing.display()));
+        }
+        return Ok((
+            mlx_backbone::MlxFiles { config: dir.join("config.json"), shards },
+            dir.join("joint_head.safetensors"),
+        ));
+    }
+    let api = hf_hub::api::sync::Api::new()
+        .map_err(|err| format!("HuggingFace API 초기화에 실패했습니다: {err}"))?;
+    let repo = api.model(MLX_REPO.to_string());
+    let fetch = |name: &str| {
+        repo.get(name)
+            .map_err(|err| format!("{MLX_REPO}/{name} 다운로드에 실패했습니다: {err}"))
+    };
+    let config = fetch("config.json")?;
+    let index = fetch("model.safetensors.index.json")?;
+    let head = fetch("joint_head.safetensors")?;
+    let shards = mlx_backbone::shard_names(&index)?
+        .iter()
+        .map(|name| fetch(name))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok((mlx_backbone::MlxFiles { config, shards }, head))
 }
 
 pub struct LocalTokenizer {
