@@ -37,28 +37,50 @@ pub fn settings_path_from(config_dir: Option<&str>, home: Option<&str>) -> PathB
     }
 }
 
+/// 설정에 넣을 훅 하나. 같은 명령이 같은 이벤트에 이미 있으면 matcher와 상관없이 다시 넣지 않는다.
+#[derive(Debug, Clone, Copy)]
+pub struct HookSpec<'a> {
+    pub event: &'a str,
+    pub matcher: &'a str,
+    pub command: &'a str,
+    pub timeout: u64,
+}
+
+fn display_spec(command: &str) -> HookSpec<'_> {
+    HookSpec {
+        event: "PostToolUse",
+        matcher: HOOK_MATCHER,
+        command,
+        timeout: HOOK_TIMEOUT_SECS,
+    }
+}
+
 pub fn add_hook(settings: &mut Value, command: &str) -> Result<bool, String> {
+    add_hook_spec(settings, &display_spec(command))
+}
+
+pub fn add_hook_spec(settings: &mut Value, spec: &HookSpec) -> Result<bool, String> {
     let root = settings
         .as_object()
         .ok_or_else(|| "설정 파일이 JSON 객체가 아닙니다".to_string())?;
     match root.get("hooks") {
         None => {}
-        Some(Value::Object(hooks)) => match hooks.get("PostToolUse") {
+        Some(Value::Object(hooks)) => match hooks.get(spec.event) {
             None | Some(Value::Array(_)) => {}
-            Some(_) => return Err("설정의 hooks.PostToolUse가 배열이 아닙니다".to_string()),
+            Some(_) => return Err(format!("설정의 hooks.{}가 배열이 아닙니다", spec.event)),
         },
         Some(_) => return Err("설정의 hooks가 객체가 아닙니다".to_string()),
     }
-    if already_present(settings, command) {
+    if already_present(settings, spec.event, spec.command) {
         return Ok(false);
     }
     let group = json!({
-        "matcher": HOOK_MATCHER,
-        "hooks": [{"type": "command", "command": command, "timeout": HOOK_TIMEOUT_SECS}]
+        "matcher": spec.matcher,
+        "hooks": [{"type": "command", "command": spec.command, "timeout": spec.timeout}]
     });
     if let Some(root) = settings.as_object_mut() {
         if let Value::Object(hooks) = root.entry("hooks").or_insert_with(|| json!({})) {
-            if let Value::Array(groups) = hooks.entry("PostToolUse").or_insert_with(|| json!([])) {
+            if let Value::Array(groups) = hooks.entry(spec.event).or_insert_with(|| json!([])) {
                 groups.push(group);
             }
         }
@@ -66,10 +88,10 @@ pub fn add_hook(settings: &mut Value, command: &str) -> Result<bool, String> {
     Ok(true)
 }
 
-fn already_present(settings: &Value, command: &str) -> bool {
+fn already_present(settings: &Value, event: &str, command: &str) -> bool {
     settings
         .get("hooks")
-        .and_then(|hooks| hooks.get("PostToolUse"))
+        .and_then(|hooks| hooks.get(event))
         .and_then(Value::as_array)
         .is_some_and(|groups| {
             groups
@@ -81,6 +103,11 @@ fn already_present(settings: &Value, command: &str) -> bool {
 }
 
 pub fn install_hook(path: &Path, command: &str) -> Result<Installed, String> {
+    install_hooks(path, &[display_spec(command)])
+}
+
+/// 훅 여러 개를 한 번에 병합한다. 파일은 한 번만 읽고 쓰며 백업은 처음 원본이다.
+pub fn install_hooks(path: &Path, specs: &[HookSpec]) -> Result<Installed, String> {
     let original = match std::fs::read_to_string(path) {
         Ok(text) => Some(text),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
@@ -94,7 +121,11 @@ pub fn install_hook(path: &Path, command: &str) -> Result<Installed, String> {
         })?,
         None => json!({}),
     };
-    if !add_hook(&mut settings, command)? {
+    let mut added = false;
+    for spec in specs {
+        added |= add_hook_spec(&mut settings, spec)?;
+    }
+    if !added {
         return Ok(Installed::AlreadyPresent);
     }
     let file_name = path
@@ -294,6 +325,112 @@ mod tests {
             std::fs::read(dir.join("settings.json.bak-decide")).unwrap(),
             backup_after_first
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    const GATE_COMMAND: &str = "/opt/homebrew/bin/decide gate bash-risk";
+
+    fn gate_spec() -> HookSpec<'static> {
+        HookSpec {
+            event: "PreToolUse",
+            matcher: "Bash",
+            command: GATE_COMMAND,
+            timeout: 10,
+        }
+    }
+
+    fn gate_group() -> Value {
+        json!({
+            "matcher": "Bash",
+            "hooks": [{"type": "command", "command": GATE_COMMAND, "timeout": 10}]
+        })
+    }
+
+    #[test]
+    fn a_spec_goes_under_its_own_event_and_matcher() {
+        let mut settings = json!({});
+        assert_eq!(add_hook_spec(&mut settings, &gate_spec()), Ok(true));
+        assert_eq!(settings, json!({"hooks": {"PreToolUse": [gate_group()]}}));
+    }
+
+    #[test]
+    fn the_same_command_under_another_event_does_not_count() {
+        let mut settings = json!({"hooks": {"PostToolUse": [
+            {"matcher": "Bash", "hooks": [{"type": "command", "command": GATE_COMMAND}]}
+        ]}});
+        assert_eq!(add_hook_spec(&mut settings, &gate_spec()), Ok(true));
+        assert_eq!(settings["hooks"]["PreToolUse"], json!([gate_group()]));
+        assert_eq!(settings["hooks"]["PostToolUse"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_spec_is_idempotent_and_refuses_a_non_array_event() {
+        let mut settings = json!({});
+        assert_eq!(add_hook_spec(&mut settings, &gate_spec()), Ok(true));
+        let after_first = settings.clone();
+        assert_eq!(add_hook_spec(&mut settings, &gate_spec()), Ok(false));
+        assert_eq!(settings, after_first);
+
+        let bad = json!({"hooks": {"PreToolUse": {"a": 1}}});
+        let mut settings = bad.clone();
+        let err = add_hook_spec(&mut settings, &gate_spec()).unwrap_err();
+        assert!(err.contains("PreToolUse"), "{err}");
+        assert_eq!(settings, bad);
+    }
+
+    #[test]
+    fn install_hooks_writes_every_spec_in_one_pass_with_one_backup() {
+        let dir = temp_dir();
+        let path = dir.join("settings.json");
+        let original = "{\n  \"theme\": \"dark\"\n}\n";
+        std::fs::write(&path, original).unwrap();
+        let display = HookSpec {
+            event: "PostToolUse",
+            matcher: HOOK_MATCHER,
+            command: COMMAND,
+            timeout: HOOK_TIMEOUT_SECS,
+        };
+        assert_eq!(install_hooks(&path, &[display, gate_spec()]), Ok(Installed::Added));
+        // 백업은 처음 원본이어야 한다(두 번째 스펙이 첫 스펙의 결과를 덮어쓰면 안 된다).
+        assert_eq!(
+            std::fs::read_to_string(dir.join("settings.json.bak-decide")).unwrap(),
+            original
+        );
+        let written: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(written["theme"], "dark");
+        assert_eq!(written["hooks"]["PostToolUse"], json!([our_group()]));
+        assert_eq!(written["hooks"]["PreToolUse"], json!([gate_group()]));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn install_hooks_adds_only_the_missing_spec_and_is_idempotent() {
+        let dir = temp_dir();
+        let path = dir.join("settings.json");
+        std::fs::write(&path, "{}").unwrap();
+        assert_eq!(install_hook(&path, COMMAND), Ok(Installed::Added));
+        let display = HookSpec {
+            event: "PostToolUse",
+            matcher: HOOK_MATCHER,
+            command: COMMAND,
+            timeout: HOOK_TIMEOUT_SECS,
+        };
+        assert_eq!(install_hooks(&path, &[display, gate_spec()]), Ok(Installed::Added));
+        let written: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(written["hooks"]["PostToolUse"], json!([our_group()]));
+        assert_eq!(written["hooks"]["PreToolUse"], json!([gate_group()]));
+        let after = std::fs::read(&path).unwrap();
+        let display = HookSpec {
+            event: "PostToolUse",
+            matcher: HOOK_MATCHER,
+            command: COMMAND,
+            timeout: HOOK_TIMEOUT_SECS,
+        };
+        assert_eq!(
+            install_hooks(&path, &[display, gate_spec()]),
+            Ok(Installed::AlreadyPresent)
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), after);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

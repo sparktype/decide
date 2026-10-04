@@ -4,8 +4,8 @@
 - [x] 기본값 확정(설정 경로, display=decisions, enforce는 수동 전환, 첫 게이트 bash-risk)
 - [x] 설계서의 감사 모드 모순 정정(감사 모드는 permissionDecision을 내지 않음)
 - [x] 구현 계획 작성
-- [ ] 0. 로컬 빌드 환경 복구(Xcode 16 이상) 또는 PR용 CI 도입
-- [ ] 1. `claude.rs` 훅 설치를 이벤트·matcher 인자로 일반화
+- [x] 0. 로컬 빌드 환경 복구(Xcode 27 설치, Metal Toolchain 재설치로 해결)
+- [x] 1. `claude.rs` 훅 설치를 이벤트·matcher 인자로 일반화(`HookSpec`, `add_hook_spec`, `install_hooks`)
 - [ ] 2. 데몬 `client_version` 확인과 stale 종료
 - [ ] 3. 게이트 설정(내장 기본값, 층 병합, 출처 추적)
 - [ ] 4. bash-risk 순수 로직(가리기, state, 사전 필터, 판정)
