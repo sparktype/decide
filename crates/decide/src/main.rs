@@ -1,6 +1,7 @@
 use decide::backend::{live_transport, Env};
 use decide::claude::{self, Installed};
 use decide::daemon;
+use decide::help;
 use decide::mcp::handle_message;
 use serde_json::Value;
 use std::io::{self, BufRead, Read, Write};
@@ -9,9 +10,12 @@ use std::process::Command;
 const DECIDE_BIN: &str = "/opt/homebrew/bin/decide";
 
 fn main() {
-    let mut args = std::env::args().skip(1);
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    if handle_help_and_version(&argv) {
+        return;
+    }
+    let mut args = argv.into_iter();
     match args.next().as_deref() {
-        Some("-h") | Some("--help") | None => print_help(),
         Some("mcp") => {
             reject_extra(args.next());
             if let Err(err) = run_mcp() {
@@ -53,11 +57,49 @@ fn main() {
             run_hook();
         }
         Some("gate") => run_gate(args.collect()),
-        Some(other) => {
-            eprintln!("알 수 없는 명령입니다: {other}");
-            std::process::exit(2);
-        }
+        Some(other) => unknown_command(other),
+        None => unreachable!("인자 없음은 도움말 처리에서 끝난다"),
     }
+}
+
+fn unknown_command(name: &str) -> ! {
+    eprintln!("알 수 없는 명령입니다: {name}");
+    eprintln!("사용 가능한 명령은 `decide --help`로 볼 수 있습니다.");
+    std::process::exit(2);
+}
+
+/// 도움말과 버전을 처리했으면 true. 서버를 띄우는 명령(`mcp`, `daemon`)도 도움말 옵션이 있으면 시작하지 않는다.
+/// - 인자 없음, `-h`, `--help`: 전체 도움말(종료 코드 0)
+/// - `-V`, `--version`: 버전 한 줄(다른 인자가 있으면 종료 코드 2)
+/// - `help [명령]`: 전체 또는 명령별 도움말
+/// - `<명령> -h|--help`: 그 명령의 도움말(다른 인자보다 우선)
+fn handle_help_and_version(argv: &[String]) -> bool {
+    match argv.first().map(String::as_str) {
+        None | Some("-h") | Some("--help") => println!("{}", help::overview()),
+        Some("-V") | Some("--version") => {
+            reject_extra(argv.get(1).cloned());
+            println!("{}", help::version_line());
+        }
+        Some("help") => {
+            reject_extra(argv.get(2).cloned());
+            match argv.get(1) {
+                None => println!("{}", help::overview()),
+                Some(name) => match help::for_command(name) {
+                    Some(text) => println!("{text}"),
+                    None => unknown_command(name),
+                },
+            }
+        }
+        Some(command) if argv[1..].iter().any(|arg| arg == "-h" || arg == "--help") => {
+            match help::for_command(command) {
+                Some(text) => println!("{text}"),
+                // 알 수 없는 명령이면 도움말이 아니라 분기의 오류로 넘긴다.
+                None => return false,
+            }
+        }
+        _ => return false,
+    }
+    true
 }
 
 fn run_hook() {
@@ -152,27 +194,6 @@ fn reject_extra(extra: Option<String>) {
         eprintln!("인자가 너무 많습니다");
         std::process::exit(2);
     }
-}
-
-fn print_help() {
-    println!(
-        "\
-decide [mcp|daemon|install [--claude]|hook|gate]
-
-인자 없이 실행하면 이 도움말이다.
-  mcp      stdio MCP
-  daemon   ~/.cache/decide/decide.sock
-  install  claude mcp add로 Claude Code 사용자 스코프에 decide를 등록한다
-           --claude  MCP 등록에 더해 표시 훅(PostToolUse)과 bash-risk 게이트 훅(PreToolUse, Bash)도
-                     Claude Code 사용자 설정에 넣는다. 게이트는 기본이 감사 모드라 막지 않는다
-  hook     Claude Code PostToolUse 훅. decide 결과를 사용자에게 한 줄로 보여준다
-  gate     Claude Code 훅(PreToolUse)에서 decide로 판정한다
-           gate <이름>              stdin의 훅 입력을 판정해 훅 출력 JSON을 낸다(이름: bash-risk)
-           gate --show [이름] [--json]  게이트 목록, 또는 질문·임계값·출처를 보여준다
-
-DECIDE_BACKEND=typesafe|local
-TYPESAFE_API_KEY가 있고 백엔드를 지정하지 않으면 TypeSafe Jev를 호출한다."
-    );
 }
 
 fn run_install() -> io::Result<()> {
