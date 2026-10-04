@@ -1,9 +1,9 @@
 class Decide < Formula
   desc "Choice, score, and noul decisions via TypeSafe Jev or a local model"
   homepage "https://github.com/sparktype/decide"
-  url "https://github.com/sparktype/decide/releases/download/v0.4.0/decide-v0.4.0-aarch64-apple-darwin.tar.gz"
-  sha256 "60e0aa668860afe14e7924ccc72545003f4965e96e532c11632665b35d0de5a5"
-  version "0.4.0"
+  url "https://github.com/sparktype/decide/releases/download/v0.4.1/decide-v0.4.1-aarch64-apple-darwin.tar.gz"
+  sha256 "0d5937c501c9438055032b413bad9f7a6bd56c87b19ba3987bc59f6428cb7750"
+  version "0.4.1"
 
   depends_on arch: :arm64
   depends_on macos: :sonoma
@@ -18,3 +18,4 @@ class Decide < Formula
     assert_predicate bin/"mlx.metallib", :exist?
   end
 end
+
