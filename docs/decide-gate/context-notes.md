@@ -22,3 +22,10 @@
 - 결정: 1단계는 `HookSpec { event, matcher, command, timeout }`를 받는 `add_hook_spec`/`install_hooks`를 핵심 API로 하고, 기존 `add_hook`/`install_hook`은 표시 훅용 얇은 래퍼로 남겼다. 기존 테스트 13개는 그대로 통과한다.
 - 결정: `install_hooks`는 스펙 여러 개를 한 번에 병합해 파일을 한 번만 읽고 쓴다. 백업이 처음 원본이어야 해서 스펙마다 따로 설치하지 않는다(테스트로 고정).
 - 결정: 중복 판정은 "같은 이벤트에 같은 명령이 있으면"이다. 다른 이벤트에 같은 명령 문자열이 있어도 넣는다.
+
+## 2026-10-04 (2단계 완료)
+- 결정: `daemon::handle_request`가 `(응답, 계속 서비스할지)`를 돌려주고 `handle_line`은 그 래퍼로 남겼다(기존 테스트 유지). 요청의 선택 필드 `client_version`이 `daemon::VERSION`(`CARGO_PKG_VERSION`)과 다르면 백엔드를 부르지 않고 `{"stale":true,"version":…}`로 답한 뒤 `serve` 루프가 끝난다. 필드가 없는 옛 클라이언트는 그대로 동작한다.
+- 사실: `parse_arguments`는 알 수 없는 필드를 무시하므로 `client_version`이 캐시 키에 영향을 주지 않는다.
+- 사실(기존 결함 발견): `daemon::tests::line_protocol_returns_one_json_object`는 로컬 백엔드를 부르면서 `CLEF_WEIGHTS` 보호 장치가 없어, 이 테스트만 단독 실행하면 실제로 HuggingFace에서 약 10GB를 내려받는다(244초). 전체 스위트에서는 `runtime()`의 `OnceLock`이 다른 테스트의 보호 장치 에러를 캐시해서 가려져 있었다. backend.rs 테스트와 같은 방식으로 없는 디렉터리를 가리키게 고쳤다(0.31초).
+- 사실: 위 단독 실행 때문에 `~/.cache/huggingface/hub/models--mlx-community--clef-flash-8bit`(약 10GB)가 생겼다. `CLEF_WEIGHTS` 없이 설치본(`/opt/homebrew/bin/decide`)을 쓸 때 바로 쓰이는 캐시라 지우지 않았다. 로컬 `~/.cache/decide/clef-flash-8bit`와 같은 내용이라 필요 없으면 한쪽을 지워도 된다.
+- 알려진 취약점(이번 범위 밖): 테스트들이 `CLEF_WEIGHTS`를 `set_var`/`remove_var`로 만지는 방식은 병렬 실행에서 경쟁 조건이 있다. 지금은 `OnceLock`이 첫 에러를 캐시해서 드러나지 않을 뿐이다.
