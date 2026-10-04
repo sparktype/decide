@@ -296,46 +296,6 @@ fn depthwise_causal_conv(qkv: &Array, weight: &Array, kernel: i32, channels: i32
     Ok(acc.expect("kernel >= 1"))
 }
 
-/// 게이트드 델타 규칙(mlx-lm `gated_delta_ops`의 순차 루프와 같은 수식). 커널 결과를 검증하는
-/// 참조 구현이다 — 기본 경로는 `gated_delta_rule`(Metal 커널)이다.
-///
-/// `q`/`k`는 `[1, L, Hk, Dk]`, `v`는 `[1, L, Hv, Dv]`, `g`/`beta`는 `[1, L, Hv]`.
-/// 상태는 `[1, Hv, Dv, Dk]` f32. 스텝마다 브로드캐스트+합 대신 matmul을 써서 연산 수를 줄인다.
-fn gated_delta_rule_ops(q: &Array, k: &Array, v: &Array, g: &Array, beta: &Array, cfg: &Config) -> R<Array> {
-    let len = q.shape()[1];
-    let repeat = cfg.lin_v_heads / cfg.lin_k_heads;
-    let (q, k) = if repeat > 1 {
-        (ops::repeat_axis::<f32>(q.clone(), repeat, 2)?, ops::repeat_axis::<f32>(k.clone(), repeat, 2)?)
-    } else {
-        (q.clone(), k.clone())
-    };
-
-    // 헤드를 앞으로 보내고(`[1, H, L, D]`), 시간 축으로 미리 잘라 둔다.
-    let rows = |a: &Array| -> R<Vec<Array>> { a.transpose_axes(&[0, 2, 1, 3])?.split_equal(len, 2) };
-    let cols = |a: &Array| -> R<Vec<Array>> { a.transpose_axes(&[0, 2, 3, 1])?.split_equal(len, 3) };
-    let k_rows = rows(&k)?; // [1, Hv, 1, Dk]
-    let k_cols = cols(&k)?; // [1, Hv, Dk, 1]
-    let q_cols = cols(&q)?;
-    let v_cols = cols(v)?; // [1, Hv, Dv, 1]
-    let g_steps = g.transpose_axes(&[0, 2, 1])?.reshape(&[1, cfg.lin_v_heads, len, 1, 1])?.split_equal(len, 2)?;
-    let beta_steps = beta.transpose_axes(&[0, 2, 1])?.reshape(&[1, cfg.lin_v_heads, len, 1, 1])?.split_equal(len, 2)?;
-
-    let mut state = ops::zeros::<f32>(&[1, cfg.lin_v_heads, cfg.lin_v_dim, cfg.lin_k_dim])?;
-    let mut outputs = Vec::with_capacity(len as usize);
-    for t in 0..len as usize {
-        let decay = g_steps[t].reshape(&[1, cfg.lin_v_heads, 1, 1])?;
-        let beta_t = beta_steps[t].reshape(&[1, cfg.lin_v_heads, 1, 1])?;
-        state = ops::multiply(&state, &decay)?;
-        let kv_mem = ops::matmul(&state, k_cols[t].as_dtype(Dtype::Float32)?)?; // [1, Hv, Dv, 1]
-        let delta = ops::multiply(ops::subtract(v_cols[t].as_dtype(Dtype::Float32)?, &kv_mem)?, &beta_t)?;
-        let update = ops::matmul(&delta, k_rows[t].as_dtype(Dtype::Float32)?)?; // [1, Hv, Dv, Dk]
-        state = ops::add(&state, &update)?;
-        outputs.push(ops::matmul(&state, q_cols[t].as_dtype(Dtype::Float32)?)?); // [1, Hv, Dv, 1]
-    }
-    let stacked = concatenate(&outputs, 3)?; // [1, Hv, Dv, L]
-    stacked.transpose_axes(&[0, 3, 1, 2])?.as_dtype(q.dtype())
-}
-
 /// mlx-lm `gated_delta.py`의 기본(스칼라 게이트, 마스크 없음) Metal 커널. 스레드 하나가 상태 행
 /// 하나(Dv 한 줄)를 맡고 시간 축을 커널 안에서 돈다 — ops 루프처럼 스텝마다 커널을 띄우지 않는다.
 const DELTA_KERNEL_SOURCE: &str = r#"
@@ -541,6 +501,7 @@ pub struct MlxBackbone {
 unsafe impl Send for MlxBackbone {}
 
 /// `config.json`, 샤드 safetensors를 담은 체크포인트 파일 위치.
+#[derive(Debug)]
 pub struct MlxFiles {
     pub config: PathBuf,
     pub shards: Vec<PathBuf>,
@@ -646,6 +607,46 @@ pub fn shard_names(index_path: &Path) -> Result<Vec<String>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 게이트드 델타 규칙(mlx-lm `gated_delta_ops`의 순차 루프와 같은 수식). 테스트에서 Metal 커널
+    /// 결과를 검증하는 참조 구현이다.
+    ///
+    /// `q`/`k`는 `[1, L, Hk, Dk]`, `v`는 `[1, L, Hv, Dv]`, `g`/`beta`는 `[1, L, Hv]`.
+    /// 상태는 `[1, Hv, Dv, Dk]` f32. 스텝마다 브로드캐스트+합 대신 matmul을 써서 연산 수를 줄인다.
+    fn gated_delta_rule_ops(q: &Array, k: &Array, v: &Array, g: &Array, beta: &Array, cfg: &Config) -> R<Array> {
+        let len = q.shape()[1];
+        let repeat = cfg.lin_v_heads / cfg.lin_k_heads;
+        let (q, k) = if repeat > 1 {
+            (ops::repeat_axis::<f32>(q.clone(), repeat, 2)?, ops::repeat_axis::<f32>(k.clone(), repeat, 2)?)
+        } else {
+            (q.clone(), k.clone())
+        };
+
+        // 헤드를 앞으로 보내고(`[1, H, L, D]`), 시간 축으로 미리 잘라 둔다.
+        let rows = |a: &Array| -> R<Vec<Array>> { a.transpose_axes(&[0, 2, 1, 3])?.split_equal(len, 2) };
+        let cols = |a: &Array| -> R<Vec<Array>> { a.transpose_axes(&[0, 2, 3, 1])?.split_equal(len, 3) };
+        let k_rows = rows(&k)?; // [1, Hv, 1, Dk]
+        let k_cols = cols(&k)?; // [1, Hv, Dk, 1]
+        let q_cols = cols(&q)?;
+        let v_cols = cols(v)?; // [1, Hv, Dv, 1]
+        let g_steps = g.transpose_axes(&[0, 2, 1])?.reshape(&[1, cfg.lin_v_heads, len, 1, 1])?.split_equal(len, 2)?;
+        let beta_steps = beta.transpose_axes(&[0, 2, 1])?.reshape(&[1, cfg.lin_v_heads, len, 1, 1])?.split_equal(len, 2)?;
+
+        let mut state = ops::zeros::<f32>(&[1, cfg.lin_v_heads, cfg.lin_v_dim, cfg.lin_k_dim])?;
+        let mut outputs = Vec::with_capacity(len as usize);
+        for t in 0..len as usize {
+            let decay = g_steps[t].reshape(&[1, cfg.lin_v_heads, 1, 1])?;
+            let beta_t = beta_steps[t].reshape(&[1, cfg.lin_v_heads, 1, 1])?;
+            state = ops::multiply(&state, &decay)?;
+            let kv_mem = ops::matmul(&state, k_cols[t].as_dtype(Dtype::Float32)?)?; // [1, Hv, Dv, 1]
+            let delta = ops::multiply(ops::subtract(v_cols[t].as_dtype(Dtype::Float32)?, &kv_mem)?, &beta_t)?;
+            let update = ops::matmul(&delta, k_rows[t].as_dtype(Dtype::Float32)?)?; // [1, Hv, Dv, Dk]
+            state = ops::add(&state, &update)?;
+            outputs.push(ops::matmul(&state, q_cols[t].as_dtype(Dtype::Float32)?)?); // [1, Hv, Dv, 1]
+        }
+        let stacked = concatenate(&outputs, 3)?; // [1, Hv, Dv, L]
+        stacked.transpose_axes(&[0, 3, 1, 2])?.as_dtype(q.dtype())
+    }
 
     fn close(a: &[f32], b: &[f32], tol: f32) -> bool {
         a.len() == b.len() && a.iter().zip(b).all(|(x, y)| (x - y).abs() <= tol)

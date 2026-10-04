@@ -14,7 +14,7 @@
 
 한 요청은 고른 백엔드에서만 끝난다. 429 또는 529를 받으면 그 요청만 1초 뒤에 한 번 더 보낸다. 401, 422, 연결 실패는 그 호출의 오류다. 두 백엔드의 확률을 서로 같은 값으로 맞추지는 않는다.
 
-로컬 백엔드는 Cloudflare의 Clef-flash(Qwen3.5-9B 하이브리드 백본, GGUF Q6_K, candle-transformers PR #3396에서 벤더링)와 자체 구현한 joint schema head를 같은 프로세스 안에서 직접 돌린다. 따로 띄우는 서버가 없다. 설정은 아래 "로컬 백엔드"를 본다.
+로컬 백엔드는 Cloudflare의 Clef-flash(Qwen3.5-9B 하이브리드 백본, MLX 8비트로 Apple Silicon GPU에서 실행)와 자체 구현한 joint schema head를 같은 프로세스 안에서 직접 돌린다. 따로 띄우는 서버가 없다. 설정은 아래 "로컬 백엔드"를 본다.
 
 ## 붙이기
 
@@ -53,12 +53,13 @@ decide install
 
 키가 없거나 `DECIDE_BACKEND=local`이면 `decide`는 Clef-flash를 그 프로세스 안에서 직접 돌린다. 띄워 둬야 할 서버가 없다.
 
-가중치는 두 파일이다: 백본 GGUF(`clef-flash.Q6_K.gguf`, 약 7.4GB)와 joint head(`joint_head.safetensors`).
+로컬 엔진은 MLX(`mlx-community/clef-flash-8bit`, 8비트 affine, 약 10.7GB)다. 가중치는 `config.json`, `model.safetensors.index.json`, 샤드 safetensors, `joint_head.safetensors`다. Apple Silicon에서만 돈다.
 
-- `CLEF_WEIGHTS`에 디렉터리를 넣으면 그 안에서 두 파일을 찾는다. 하나라도 없으면 다운로드로 넘어가지 않고 그대로 오류다.
-- `CLEF_WEIGHTS`가 없으면 처음 쓸 때 HuggingFace에서 받아 `~/.cache/huggingface/hub`에 둔다(백본은 `prithivMLmods/clef-flash-GGUF`, joint head와 토크나이저는 `Cloudflare/clef-flash`에서). 첫 호출은 그만큼 시간과 디스크를 쓴다.
+- `CLEF_WEIGHTS`에 디렉터리를 넣으면 그 안에서 위 파일들을 찾는다. 하나라도 없으면 다운로드로 넘어가지 않고 그대로 오류다.
+- `CLEF_WEIGHTS`가 없으면 처음 쓸 때 HuggingFace에서 받아 `~/.cache/huggingface/hub`에 둔다(백본과 joint head는 `mlx-community/clef-flash-8bit`, 토크나이저는 `Cloudflare/clef-flash`에서). 첫 호출은 그만큼 시간과 디스크를 쓴다.
+- 따뜻한 상태의 한 번 호출은 약 150토큰에 0.6초, 약 900토큰에 2.8초다(M1 Max).
 - 로컬 답은 TypeSafe 답과 같은 모양이다(`choice`/`score`/`noul`, choice·score의 `probabilities`와 `confidence`, score의 `legend`). `routing.model`은 `"clef-flash"`다.
-- 5개 골든 케이스로 BF16 Python 오라클(`scripts/clef_flash_oracle.py`, `cargo test --features parity`)과 대조한 결과 4/5가 질적으로 일치한다. 어긋난 1개는 선택지가 11개인 choice 질문으로, 오라클 자체도 1·2위 확률 차이가 0.02 안쪽인 거의 동률 사례다 — 양자화 버그가 아니라 9B 모델을 CPU에서 4~6비트로 돌리는 데 따르는, 측정되고 받아들인 한계다. 중요한 판단이면 `probabilities`를 보고 직접 확인한다.
+- 5개 골든 케이스로 BF16 Python 오라클(`scripts/clef_flash_oracle.py`, `cargo test --features parity`)과 대조한 결과 5/5가 일치한다(로짓 최대 차이 0.095). 선택지가 11개인 choice 질문은 오라클 자체도 1·2위 확률 차이가 0.02 안쪽인 거의 동률 사례이니, 중요한 판단이면 `probabilities`를 보고 직접 확인한다.
 
 ## 사용법
 

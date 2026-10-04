@@ -20,3 +20,11 @@
 - 사실: 같은 입력의 candle CPU(Q6_K) 기준선은 짧은 입력 30~48초, 907토큰 125초였다(모델 로드는 첫 호출에 포함). MLX가 약 45~50배 빠르다.
 - 참고: 테스트 도중 델타 커널 비교 테스트가 한 번 실패했는데 원인은 합성 입력이 정규화되지 않아 값이 수십만으로 폭주해 절대 오차 기준이 깨진 것이었다(값은 부동소수점 정밀도까지 일치). q/k 스케일을 줄여 고쳤다.
 - 남은 일: (1) 릴리스 파이프라인(GitHub Actions)에서 mlx 빌드를 포함할지 결정 — 러너에 Metal Toolchain이 필요하다. (2) 기본 엔진을 mlx로 배포할지. (3) show.rs의 local score legend 형태 문제는 기존 한계 그대로다.
+
+## 2026-10-04 (이전 코드 정리)
+- 결정: 사용자가 mlx를 기본 엔진으로 정한 뒤 이전 코드를 모두 걷어내라고 해서, candle GGUF 백본 경로를 삭제했다. `local/backbone.rs`(약 990줄), GGUF 다운로드·해석, `Engine` 분기, `DECIDE_LOCAL_ENGINE`, `mlx`·`default` Cargo 기능이 사라졌다. `mlx-rs`/`mlx-sys`는 일반 의존성이다.
+- 결정: candle은 조인트 헤드 때문에 계속 쓴다. `candle-core/nn`은 그대로다.
+- 결정: ops 델타 루프는 테스트 모듈로 옮겨 Metal 커널의 참조 구현으로만 남겼다.
+- 결정: 가중치 해석은 `resolve_pinned`(CLEF_WEIGHTS, 없으면 하드 에러)와 `download_weights`(HF 캐시)로 나눴다. 옛 가중치 테스트를 `resolve_pinned_*` 테스트 3개와 `pinned_weights_dir` 테스트로 바꿨다.
+- 결과: 정리 후에도 parity 5/5, 로짓 최대 차이 0.0948로 같았고 `cargo test`는 82개가 통과했다. 이전 CPU 경로가 필요하면 커밋 d81f1da 이전 이력에서 꺼낸다.
+- 결과: 릴리스 워크플로는 Metal Toolchain과 cmake 단계를 항상 거친다.
