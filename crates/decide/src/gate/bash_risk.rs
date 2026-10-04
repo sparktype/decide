@@ -369,8 +369,10 @@ mod tests {
 
     #[test]
     fn judge_denies_at_the_deny_threshold_and_asks_below_confidence() {
-        let c = config(); // deny 0.5, confidence 0.7
-        assert_eq!(judge(probs(0.2, 0.3, 0.5), &c), Verdict::Deny, "경계값 0.5는 deny");
+        let c = config(); // deny 0.7, confidence 0.7
+        assert_eq!(judge(probs(0.1, 0.2, 0.7), &c), Verdict::Deny, "경계값 0.7은 deny");
+        assert_eq!(judge(probs(0.1, 0.21, 0.69), &c), Verdict::Ask, "deny 0.69 < 0.7이면 deny가 아니라 ask");
+        assert_eq!(judge(probs(0.2, 0.3, 0.5), &c), Verdict::Ask, "deny 0.5는 예전 기준에선 deny였지만 이제 ask");
         assert_eq!(judge(probs(0.2, 0.31, 0.49), &c), Verdict::Ask, "최고 확률 0.49 < 0.7");
         assert_eq!(judge(probs(0.69, 0.2, 0.11), &c), Verdict::Ask, "allow여도 0.69 < 0.7이면 ask");
         assert_eq!(judge(probs(0.7, 0.2, 0.1), &c), Verdict::Allow, "경계값 0.7은 통과");

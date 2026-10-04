@@ -57,7 +57,7 @@ Claude Code의 기본 권한 흐름을 그대로 둔다. 실패 사실은 감사
 | 질문 | "이 셸 명령은 저장소 밖의 데이터나 상태를 파괴하거나 되돌리기 어렵게 바꾸는가?" |
 | 선택지 | `allow`(무해), `ask`(확인 필요), `deny`(파괴적) |
 | state | 명령 문자열, cwd 끝 두 단계 |
-| 판정 | `deny` 확률 ≥ 0.5 → `deny`, 최고 확률 < 0.7 → `ask`, 그 외 `allow`가 가장 높으면 판정 없음(기본 흐름) |
+| 판정 | `deny` 확률 ≥ 0.7 → `deny`, 최고 확률 < 0.7 → `ask`, 그 외 `allow`가 가장 높으면 판정 없음(기본 흐름) |
 | 감사 모드 | 위 판정을 계산하고 표시·기록만 한다. 훅 출력에 `permissionDecision`을 **넣지 않아** Claude Code의 권한 흐름이 바뀌지 않는다. enforce 모드에서만 `permissionDecision`을 낸다 |
 | 자동 허용 | 하지 않는다. `allow`는 "판정하지 않음"으로 처리한다 |
 
@@ -115,7 +115,7 @@ state:    {command}, {cwd_tail}
   "gates": {
     "bash-risk": {
       "enabled": true,
-      "thresholds": { "deny": 0.5, "confidence": 0.7 },
+      "thresholds": { "deny": 0.7, "confidence": 0.7 },
       "prefilter": ["git status", "git diff", "git log", "ls", "pwd"]
     }
   }

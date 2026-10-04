@@ -180,7 +180,7 @@ decide install --claude
 
 **어떻게 판정하나.**
 - `git status`, `ls`, `cat` 같은 읽기 위주 명령은 데몬을 부르지 않고 건너뛴다(사전 필터). 파이프, `;`, `&&`, 리다이렉션, `$(…)`가 하나라도 들어 있으면 건너뛰지 않는다.
-- 그 밖의 명령은 상주 데몬에 묻는다. `deny` 확률이 0.5 이상이면 `deny`, 최고 확률이 0.7 미만이면 `ask`, 아니면 최고 확률의 선택지다. `allow`는 판정하지 않음(기본 흐름)이다.
+- 그 밖의 명령은 상주 데몬에 묻는다. `deny` 확률이 0.7 이상이면 `deny`, 최고 확률이 0.7 미만이면 `ask`, 아니면 최고 확률의 선택지다. `allow`는 판정하지 않음(기본 흐름)이다.
 - 데몬이 꺼져 있거나 제한 시간(기본 2초) 안에 답하지 않거나 오류면 **판정 없이 통과**한다. 데몬이 없으면 이번 호출은 통과시키고 데몬을 띄워 둔다. 첫 호출은 모델을 읽느라 제한 시간을 넘길 수 있다.
 
 **설정과 보기.** `decide gate --show`는 게이트와 설정 파일 위치를, `decide gate --show bash-risk`는 질문·선택지·임계값·사전 필터와 값마다의 출처를 보여 준다. `--json`을 붙이면 같은 내용이 JSON으로 나오고, 그 `config`는 설정 파일에 그대로 복사할 수 있다.
@@ -195,7 +195,7 @@ decide install --claude
   "gates": {
     "bash-risk": {
       "enabled": true,
-      "thresholds": {"deny": 0.5, "confidence": 0.7},
+      "thresholds": {"deny": 0.7, "confidence": 0.7},
       "prefilter": ["git status", "git diff", "git log", "ls", "pwd"]
     }
   }

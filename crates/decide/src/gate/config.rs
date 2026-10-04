@@ -75,7 +75,7 @@ pub fn builtin() -> Config {
         timeout_ms: 2000,
         bash_risk: GateConfig {
             enabled: true,
-            deny: 0.5,
+            deny: 0.7,
             confidence: 0.7,
             prefilter: DEFAULT_PREFILTER.iter().map(|entry| entry.to_string()).collect(),
         },
@@ -342,7 +342,7 @@ mod tests {
         assert_eq!(result.config.display, Display::Decisions);
         assert_eq!(result.config.timeout_ms, 2000);
         assert!(result.config.bash_risk.enabled);
-        assert_eq!(result.config.bash_risk.deny, 0.5);
+        assert_eq!(result.config.bash_risk.deny, 0.7);
         assert_eq!(result.config.bash_risk.confidence, 0.7);
         assert_eq!(result.config.bash_risk.prefilter.len(), 12);
         assert!(result.sources.values().all(|source| *source == Source::Builtin));
@@ -453,7 +453,7 @@ mod tests {
         let text = to_json(&first).to_string();
         let second = loaded(Some(&text), None).config;
         assert_eq!(first, second);
-        assert_eq!(to_json(&builtin())["gates"]["bash-risk"]["thresholds"]["deny"], 0.5);
+        assert_eq!(to_json(&builtin())["gates"]["bash-risk"]["thresholds"]["deny"], 0.7);
         assert_eq!(to_json(&builtin())["mode"], "audit");
         assert_eq!(to_json(&builtin())["display"], "decisions");
     }
@@ -528,7 +528,7 @@ mod tests {
         assert_eq!(config.mode, Mode::Audit);
         assert_eq!(config.display, Display::All);
         assert_eq!(config.timeout_ms, 2000);
-        assert_eq!(config.bash_risk.deny, 0.5);
+        assert_eq!(config.bash_risk.deny, 0.7);
         assert_eq!(config.bash_risk.confidence, 0.6);
         assert_eq!(config.bash_risk.prefilter.len(), 12);
         for needle in ["mode", "timeout_ms", "deny", "prefilter", "no-such-gate"] {

@@ -151,7 +151,7 @@ mod tests {
         .to_string()
     }
 
-    const DENY_ANSWER: &str = r#"{"answer":{"type":"choice","choice":"deny","confidence":0.62,"probabilities":{"allow":0.08,"ask":0.3,"deny":0.62}},"routing":{"backend":"local","model":"clef-flash"},"latency_ms":540.0}"#;
+    const DENY_ANSWER: &str = r#"{"answer":{"type":"choice","choice":"deny","confidence":0.82,"probabilities":{"allow":0.03,"ask":0.15,"deny":0.82}},"routing":{"backend":"local","model":"clef-flash"},"latency_ms":540.0}"#;
     const ALLOW_ANSWER: &str = r#"{"answer":{"type":"choice","choice":"allow","confidence":0.95,"probabilities":{"allow":0.95,"ask":0.04,"deny":0.01}},"routing":{"backend":"local","model":"clef-flash"},"latency_ms":300.0}"#;
 
     /// 한 번만 받아 `reply`로 답하는 가짜 데몬. 받은 요청 줄을 돌려준다.
@@ -232,7 +232,7 @@ mod tests {
         assert_eq!(log[0]["backend"], "local");
         assert_eq!(log[0]["model"], "clef-flash");
         assert_eq!(log[0]["prefiltered"], false);
-        assert_eq!(log[0]["probs"]["deny"], 0.62);
+        assert_eq!(log[0]["probs"]["deny"], 0.82);
         assert!(log[0]["ts"].as_u64().unwrap() > 1_700_000_000);
         let _ = std::fs::remove_dir_all(&dir);
     }
