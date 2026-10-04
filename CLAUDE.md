@@ -52,10 +52,14 @@ brew install sparktype/tap/decide
 ```
 
 The published formula is `Formula/decide.rb` in `sparktype/homebrew-tap`. This repo's
-`packaging/homebrew/decide.rb` records the same install. Version is 0.2.0. GitHub
+`packaging/homebrew/decide.rb` records the same install. Version is 0.2.1. GitHub
 Actions builds `crates/decide` and uploads a release asset when a `v*` tag is pushed;
 the formula downloads that prebuilt arm64 binary and installs it, no Rust toolchain
-required at install time. The API key stays in the environment as `TYPESAFE_API_KEY`.
+required at install time. The release tarball holds `decide` and `mlx.metallib` (the MLX GPU
+kernels) side by side, and the formula must install both into the same directory: MLX looks next
+to the executable first and otherwise falls back to a path baked in at build time
+(`/Users/runner/.mlx/lib/...`), which does not exist on a user's machine. v0.2.0 shipped without it
+and every inference failed. The API key stays in the environment as `TYPESAFE_API_KEY`.
 `.mcp.json` points `decide` at `/opt/homebrew/bin/decide` with `args: ["mcp"]` and no
 `env` entry. Running `decide install` registers the tool in Claude Code's user scope
 by shelling out to `claude mcp add -s user decide -- /opt/homebrew/bin/decide mcp`,
