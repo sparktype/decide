@@ -3,6 +3,8 @@ pub mod bash_risk;
 pub mod client;
 pub mod config;
 pub mod output;
+pub mod rules;
+pub mod stats;
 
 use output::{Kind, Outcome};
 use serde_json::{json, Value};
@@ -39,7 +41,11 @@ pub fn run_hook(name: &str, input: &str, ctx: &Context, spawn: &mut dyn FnMut())
         return None;
     }
 
-    let kind = if bash_risk::prefiltered(&command, &settings.bash_risk.prefilter) {
+    let rule = rules::judge(&command, &settings.bash_risk.deny_patterns, &settings.bash_risk.ask_patterns);
+    let kind = if let Some((verdict, pattern)) = rule {
+        // 정적 규칙은 사전 필터보다 먼저 보고, 걸리면 모델을 부르지 않는다.
+        Kind::Rule { verdict, pattern: pattern.to_string() }
+    } else if bash_risk::prefiltered(&command, &settings.bash_risk.prefilter) {
         Kind::Prefiltered
     } else {
         let request = bash_risk::request(&command, cwd.to_str().unwrap_or(""), &ctx.client_version);
@@ -99,12 +105,17 @@ fn audit_record(outcome: &Outcome, cwd: &Path) -> Value {
         "model": null,
         "latency_ms": null,
         "prefiltered": false,
+        "rule": null,
         "failure": null,
         "command": bash_risk::clip(&outcome.command, 200),
         "cwd_tail": bash_risk::cwd_tail(cwd.to_str().unwrap_or("")),
     });
     match &outcome.kind {
         Kind::Prefiltered => record["prefiltered"] = json!(true),
+        Kind::Rule { verdict, pattern } => {
+            record["verdict"] = json!(verdict_name(*verdict));
+            record["rule"] = json!(pattern);
+        }
         Kind::Failed { reason } => record["failure"] = json!(reason),
         Kind::Judged { verdict, probs, result } => {
             record["verdict"] = json!(verdict_name(*verdict));
@@ -317,6 +328,88 @@ mod tests {
         let log = std::fs::read_to_string(dir.join(".cache/decide/gate.log")).unwrap();
         assert!(!log.contains("supersecretvalue"), "{log}");
         assert!(log.contains("API_TOKEN=***"), "{log}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    const RULES: &str = r#"{"gates": {"bash-risk": {
+        "deny_patterns": ["*mkfs*"], "ask_patterns": ["*clean -fd*", "*.env"]}}}"#;
+
+    #[test]
+    fn a_deny_rule_decides_without_the_daemon_and_is_logged_with_its_pattern() {
+        let dir = temp_dir("rdeny");
+        write_config(&dir.join(".config/decide/gates.json"), RULES);
+        let mut spawned = 0;
+        // 가짜 데몬이 없다. 규칙이 먼저 끝내므로 데몬에 연결하지도 띄우지도 않는다.
+        let output = run_hook("bash-risk", &hook_input("sudo mkfs.ext4 /dev/sda", &dir), &ctx(&dir), &mut || spawned += 1)
+            .expect("deny 규칙은 표시된다");
+        assert_eq!(spawned, 0, "데몬을 띄우면 안 된다");
+        let message = output["systemMessage"].as_str().unwrap();
+        assert!(message.contains("deny (감사 모드 — 막지 않음)"), "{message}");
+        assert!(message.contains("정적 규칙 `*mkfs*` (모델 호출 없음)"), "{message}");
+        assert!(output.get("hookSpecificOutput").is_none(), "감사 모드는 결정하지 않는다");
+        let log = audit_lines(&dir);
+        assert_eq!(log.len(), 1);
+        assert_eq!(log[0]["verdict"], "deny");
+        assert_eq!(log[0]["rule"], "*mkfs*");
+        assert_eq!(log[0]["backend"], Value::Null);
+        assert_eq!(log[0]["latency_ms"], Value::Null);
+        assert_eq!(log[0]["prefiltered"], false);
+        assert_eq!(log[0]["failure"], Value::Null);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_ask_rule_becomes_a_permission_decision_in_enforce_mode() {
+        let dir = temp_dir("rask");
+        write_config(
+            &dir.join(".config/decide/gates.json"),
+            r#"{"mode": "enforce", "gates": {"bash-risk": {"ask_patterns": ["*clean -fd*"]}}}"#,
+        );
+        let output = run_hook("bash-risk", &hook_input("git clean -fdx", &dir), &ctx(&dir), &mut || {}).unwrap();
+        assert_eq!(output["hookSpecificOutput"]["permissionDecision"], "ask");
+        assert!(output["hookSpecificOutput"]["permissionDecisionReason"].as_str().unwrap().contains("정적 규칙"));
+        assert_eq!(audit_lines(&dir)[0]["mode"], "enforce");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rules_take_precedence_over_the_prefilter() {
+        let dir = temp_dir("rpre");
+        write_config(&dir.join(".config/decide/gates.json"), RULES);
+        // `cat`은 사전 필터에 있어 규칙이 없으면 조용히 통과한다.
+        let output = run_hook("bash-risk", &hook_input("cat ~/project/.env", &dir), &ctx(&dir), &mut || {})
+            .expect("사전 필터가 아니라 ask 규칙이 먼저 적용된다");
+        assert!(output["systemMessage"].as_str().unwrap().contains("ask (감사 모드"), "{output}");
+        let log = audit_lines(&dir);
+        assert_eq!(log[0]["prefiltered"], false);
+        assert_eq!(log[0]["rule"], "*.env");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_deny_rule_wins_over_an_ask_rule() {
+        let dir = temp_dir("rboth");
+        write_config(
+            &dir.join(".config/decide/gates.json"),
+            r#"{"gates": {"bash-risk": {"deny_patterns": ["*mkfs*"], "ask_patterns": ["*mkfs*"]}}}"#,
+        );
+        let output = run_hook("bash-risk", &hook_input("mkfs.ext4 /dev/sdb", &dir), &ctx(&dir), &mut || {}).unwrap();
+        assert!(output["systemMessage"].as_str().unwrap().contains("deny (감사 모드"), "{output}");
+        assert_eq!(audit_lines(&dir)[0]["verdict"], "deny");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_command_no_rule_matches_still_goes_to_the_daemon() {
+        let dir = temp_dir("rmiss");
+        write_config(&dir.join(".config/decide/gates.json"), RULES);
+        let server = fake_daemon(&dir.join("d.sock"), DENY_ANSWER);
+        let output = run_hook("bash-risk", &hook_input("rm -rf ~/x", &dir), &ctx(&dir), &mut || {}).unwrap();
+        server.join().unwrap();
+        assert!(output["systemMessage"].as_str().unwrap().contains("deny (감사 모드"), "{output}");
+        let log = audit_lines(&dir);
+        assert_eq!(log[0]["rule"], Value::Null, "규칙이 아니라 모델 판정이다");
+        assert_eq!(log[0]["backend"], "local");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -13,6 +13,8 @@ pub enum Kind {
     Judged { verdict: Verdict, probs: Probs, result: Value },
     /// 데몬 연결 실패, 시간 초과, 백엔드 오류 등으로 판정 없이 통과했다.
     Failed { reason: String },
+    /// 정적 규칙(글롭 패턴)이 모델을 부르지 않고 `Deny` 또는 `Ask`로 확정했다.
+    Rule { verdict: Verdict, pattern: String },
 }
 
 #[derive(Debug, Clone)]
@@ -69,6 +71,19 @@ fn display_name(display: Display) -> &'static str {
     }
 }
 
+/// `--show`가 규칙 종류마다 보이는 줄 수 상한. 기본 규칙이 많아 전부 나열하면 화면을 채운다.
+const SHOWN_RULES: usize = 8;
+
+/// 규칙 목록을 줄로 만든다. 상한을 넘으면 나머지 개수와 전체를 보는 방법을 한 줄로 알린다.
+fn rule_lines(kind: &str, patterns: &[String]) -> Vec<String> {
+    let mut lines: Vec<String> =
+        patterns.iter().take(SHOWN_RULES).map(|pattern| format!("  {kind:<5} {pattern}")).collect();
+    if patterns.len() > SHOWN_RULES {
+        lines.push(format!("  … {kind} 외 {}개 (--json으로 전체 목록)", patterns.len() - SHOWN_RULES));
+    }
+    lines
+}
+
 /// 설정 키 하나의 값을 사람이 읽는 문자열로 만든다.
 fn value_text(config: &Config, key: &str) -> String {
     match key {
@@ -79,6 +94,8 @@ fn value_text(config: &Config, key: &str) -> String {
         "bash-risk.deny" => config.bash_risk.deny.to_string(),
         "bash-risk.confidence" => config.bash_risk.confidence.to_string(),
         "bash-risk.prefilter" => format!("{}개", config.bash_risk.prefilter.len()),
+        "bash-risk.deny_patterns" => format!("{}개", config.bash_risk.deny_patterns.len()),
+        "bash-risk.ask_patterns" => format!("{}개", config.bash_risk.ask_patterns.len()),
         _ => "?".to_string(),
     }
 }
@@ -135,6 +152,13 @@ pub fn show_gate(loaded: &Loaded, name: &str, json: bool) -> Option<String> {
         config.bash_risk.prefilter.join(", "),
         config.bash_risk.prefilter.len()
     ));
+    lines.push(format!(
+        "정적 규칙: deny {}개, ask {}개 (걸리면 모델 없이 확정, 사전 필터보다 먼저 본다)",
+        config.bash_risk.deny_patterns.len(),
+        config.bash_risk.ask_patterns.len()
+    ));
+    lines.extend(rule_lines("deny", &config.bash_risk.deny_patterns));
+    lines.extend(rule_lines("ask", &config.bash_risk.ask_patterns));
     lines.push("값과 출처:".to_string());
     for key in config::KEYS {
         let source = loaded.sources.get(key).copied().unwrap_or(config::Source::Builtin);
@@ -152,6 +176,7 @@ pub fn show_gate(loaded: &Loaded, name: &str, json: bool) -> Option<String> {
 pub fn hook_output(outcome: &Outcome) -> Option<Value> {
     let decision = match (&outcome.kind, outcome.mode) {
         (Kind::Judged { verdict, probs, .. }, Mode::Enforce) => permission(*verdict, probs, &outcome.gate),
+        (Kind::Rule { verdict, pattern }, Mode::Enforce) => rule_permission(*verdict, pattern, &outcome.gate),
         _ => None,
     };
     let message = message(outcome);
@@ -182,6 +207,16 @@ fn permission(verdict: Verdict, probs: &Probs, gate: &str) -> Option<(&'static s
     Some((decision, format!("decide gate {gate}: {meaning} ({})", ranked(probs))))
 }
 
+/// 정적 규칙 판정을 enforce 모드에서 Claude Code에 넘길 `(permissionDecision, 이유)`. `Allow`는 `None`이다.
+fn rule_permission(verdict: Verdict, pattern: &str, gate: &str) -> Option<(&'static str, String)> {
+    let decision = match verdict {
+        Verdict::Allow => return None,
+        Verdict::Ask => "ask",
+        Verdict::Deny => "deny",
+    };
+    Some((decision, format!("decide gate {gate}: 정적 규칙 `{pattern}`에 걸렸습니다 (판정: {decision}, 모델 호출 없음)")))
+}
+
 /// 사용자에게 보여 줄 근거 문구. 표시 방식(`display`)과 결과 종류에 따라 없을 수 있다.
 fn message(outcome: &Outcome) -> Option<String> {
     let head = format!("🛡 decide gate {}:", outcome.gate);
@@ -207,6 +242,13 @@ fn message(outcome: &Outcome) -> Option<String> {
                 mode_text(outcome.mode, *verdict),
                 ranked(probs),
                 footer(result),
+            )
+        }
+        Kind::Rule { verdict, pattern } if *verdict != Verdict::Allow && outcome.display != Display::Off => {
+            format!(
+                "{head} {} ({})\n   근거: 정적 규칙 `{pattern}` (모델 호출 없음)\n   대상: {command}",
+                verdict_label(*verdict),
+                mode_text(outcome.mode, *verdict),
             )
         }
         _ => return None,
@@ -439,6 +481,39 @@ mod tests {
     }
 
     #[test]
+    fn show_lists_the_static_rules_with_their_sources() {
+        let user = r#"{"gates": {"bash-risk": {
+            "deny_patterns": ["*mkfs*"], "ask_patterns": ["*clean -fd*", "*.env"]}}}"#;
+        let loaded = crate::gate::config::load(Some(user), None);
+        let text = show_gate(&loaded, "bash-risk", false).unwrap();
+        assert!(text.contains("정적 규칙: deny 1개, ask 2개"), "{text}");
+        assert!(text.contains("  deny  *mkfs*"), "{text}");
+        assert!(text.contains("  ask   *clean -fd*") && text.contains("  ask   *.env"), "{text}");
+        assert!(text.contains("bash-risk.deny_patterns = 1개 (사용자)"), "{text}");
+        assert!(text.contains("bash-risk.ask_patterns = 2개 (사용자)"), "{text}");
+        let value: Value = serde_json::from_str(&show_gate(&loaded, "bash-risk", true).unwrap()).unwrap();
+        assert_eq!(value["config"]["gates"]["bash-risk"]["deny_patterns"], json!(["*mkfs*"]));
+        assert_eq!(value["sources"]["bash-risk.ask_patterns"], "사용자");
+    }
+
+    #[test]
+    fn show_truncates_long_rule_lists_and_the_json_has_them_all() {
+        let loaded = crate::gate::config::load(None, None);
+        let rules = &loaded.config.bash_risk;
+        let text = show_gate(&loaded, "bash-risk", false).unwrap();
+        assert_eq!(text.lines().filter(|line| line.starts_with("  deny  ")).count(), 8, "{text}");
+        assert_eq!(text.lines().filter(|line| line.starts_with("  ask   ")).count(), 8, "{text}");
+        let more_deny = rules.deny_patterns.len() - 8;
+        let more_ask = rules.ask_patterns.len() - 8;
+        assert!(text.contains(&format!("  … deny 외 {more_deny}개 (--json으로 전체 목록)")), "{text}");
+        assert!(text.contains(&format!("  … ask 외 {more_ask}개 (--json으로 전체 목록)")), "{text}");
+        let value: Value = serde_json::from_str(&show_gate(&loaded, "bash-risk", true).unwrap()).unwrap();
+        let listed = &value["config"]["gates"]["bash-risk"];
+        assert_eq!(listed["deny_patterns"].as_array().unwrap().len(), rules.deny_patterns.len());
+        assert_eq!(listed["ask_patterns"].as_array().unwrap().len(), rules.ask_patterns.len());
+    }
+
+    #[test]
     fn an_unknown_gate_name_has_no_detail() {
         let loaded = crate::gate::config::load(None, None);
         assert!(show_gate(&loaded, "no-such-gate", false).is_none());
@@ -449,6 +524,44 @@ mod tests {
     fn the_message_names_the_question_the_model_was_asked() {
         let text = message(&hook_output(&judged(Verdict::Ask, Mode::Audit, Display::Decisions)));
         assert!(text.contains(QUESTION));
+    }
+
+    fn ruled(verdict: Verdict, mode: Mode, display: Display) -> Outcome {
+        Outcome {
+            gate: "bash-risk".into(),
+            mode,
+            display,
+            command: "sudo mkfs.ext4 /dev/sda".into(),
+            kind: Kind::Rule { verdict, pattern: "*mkfs*".into() },
+            warnings: 0,
+        }
+    }
+
+    #[test]
+    fn audit_rule_shows_the_pattern_without_a_question_or_probabilities() {
+        let output = hook_output(&ruled(Verdict::Deny, Mode::Audit, Display::Decisions));
+        let expected = "🛡 decide gate bash-risk: deny (감사 모드 — 막지 않음)\n   근거: 정적 규칙 `*mkfs*` (모델 호출 없음)\n   대상: sudo mkfs.ext4 /dev/sda";
+        assert_eq!(message(&output), expected);
+        assert!(output.unwrap().get("hookSpecificOutput").is_none(), "감사 모드는 판정을 내리면 안 된다");
+    }
+
+    #[test]
+    fn enforce_rule_makes_a_permission_decision_naming_the_pattern() {
+        for (verdict, decision) in [(Verdict::Deny, "deny"), (Verdict::Ask, "ask")] {
+            let output = hook_output(&ruled(verdict, Mode::Enforce, Display::Decisions)).unwrap();
+            assert_eq!(output["hookSpecificOutput"]["permissionDecision"], decision);
+            let reason = output["hookSpecificOutput"]["permissionDecisionReason"].as_str().unwrap();
+            assert!(reason.contains("정적 규칙 `*mkfs*`") && reason.contains(decision), "{reason}");
+            assert!(output["systemMessage"].as_str().unwrap().contains("enforce"), "{output}");
+        }
+    }
+
+    #[test]
+    fn display_off_hides_the_rule_message_but_enforce_still_decides() {
+        assert!(hook_output(&ruled(Verdict::Deny, Mode::Audit, Display::Off)).is_none());
+        let output = hook_output(&ruled(Verdict::Deny, Mode::Enforce, Display::Off)).unwrap();
+        assert_eq!(output["hookSpecificOutput"]["permissionDecision"], "deny");
+        assert!(output.get("systemMessage").is_none(), "{output}");
     }
 
     #[test]

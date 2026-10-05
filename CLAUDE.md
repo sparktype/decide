@@ -129,7 +129,7 @@ or `.claude/settings.json`, restart Claude Code.
   when it differs from `daemon::VERSION` the daemon skips the backend, answers
   `{"stale":true,"version":…}`, and exits, so an upgraded client never keeps talking to an old
   daemon (`handle_request` returns `(reply, keep_serving)`). Requests without the field behave as before.
-- `main.rs` routes `mcp`, `daemon`, `install`, `hook`, and `gate` subcommands. No arguments prints
+- `main.rs` routes `mcp`, `daemon`, `install`, `hook`, and `gate` subcommands (`gate` also has `--show` and `stats`). No arguments prints
   help (see `help.rs`). `install` shells out to `claude mcp add -s user decide -- <bin> mcp`.
 - `claude.rs` merges hooks into Claude Code's user settings for `decide install --claude`:
   `add_hook_spec` (pure) appends one group for a `HookSpec` (event, matcher, command, timeout), idempotent on
@@ -144,10 +144,18 @@ or `.claude/settings.json`, restart Claude Code.
   `score_text` reads `legend` both as TypeSafe's object keyed by index strings and as the local
   backend's plain array.
 - `gate/` runs the Claude Code hook gate behind `decide gate <name>` (design:
-  `docs/superpowers/specs/2026-10-04-decide-gate-design.md`, plan and decision notes in `docs/decide-gate/`).
+  `docs/superpowers/specs/2026-10-04-decide-gate-design.md`, plan and decision notes in `docs/decide-gate/`;
+  the static rules and `stats` in `docs/gate-rules-stats/`).
   `config.rs` merges built-in defaults, `~/.config/decide/gates.json`, and `<cwd>/.decide/gates.json` (the repo
-  layer may only tighten: enforce, enable, lower `deny`, raise `confidence`, shrink the prefilter; `display` and
-  `timeout_ms` are not repo-settable) and tracks each value's source for `--show`. `bash_risk.rs` holds the pure
+  layer may only tighten: enforce, enable, lower `deny`, raise `confidence`, shrink the prefilter, add to
+  `deny_patterns`/`ask_patterns` as a union; `display` and `timeout_ms` are not repo-settable), holds the built-in
+  static rule lists, and tracks each value's source for `--show`. `rules.rs` is the static rule layer: a
+  glob matcher (`*` only, `\*` for a literal star, a trailing ` *` also matches no arguments) applied to each
+  command segment (split on `&&`, `||`, `;`, newline outside quotes, `sudo`-style wrappers stripped, pipes kept
+  whole), never to the whole command because a `*` would span separate commands. `run_hook` checks
+  `deny → ask → prefilter → model`, so a rule hit never reaches the daemon (`Kind::Rule`). `stats.rs` aggregates
+  `gate.log` (decision kinds, verdict mix, per-backend latency, timeouts, low-confidence asks, top rules) behind
+  `decide gate stats`; it reports numbers only. `bash_risk.rs` holds the pure
   logic (secret redaction, the three-way `allow`/`ask`/`deny` choice request, prefilter that never applies to
   commands containing shell metacharacters, probabilities → verdict). `output.rs` turns an outcome into hook
   output JSON and the reasoning shown to the user (audit mode emits `systemMessage` only and never a
@@ -169,5 +177,8 @@ unreliably. See the README section "에이전트가 쓸 때".
 **Tests inject the backend.** Rust tests use a scripted transport and a fake clock.
 `tests/stop_hook.rs` runs `python3` against the hook's pure logic. Keep checks that
 need real weights or a live TypeSafe key (`--features parity`, `#[ignore]` local
-inference tests, the `tests/gate_eval.rs` gate evaluation) out of the default suites. Unix socket
+inference tests, the `tests/gate_eval.rs` gate evaluation) out of the default suites. `tests/gate_rules.rs`
+needs no weights and stays in the default suite: no allow-labelled command in any fixture set may match a default
+rule, and the rules must match heldout3's pre-registered `rule_expect`. `tests/gate_rules_replay.rs` (`#[ignore]`)
+replays a real `gate.log` through the default rules for a human to review false positives. Unix socket
 paths are limited to about 104 bytes on macOS, so tests that bind sockets use short temp directory names.

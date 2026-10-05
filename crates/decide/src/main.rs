@@ -115,10 +115,12 @@ fn run_hook() {
     }
 }
 
-/// `decide gate <이름>`(stdin 훅 입력 → 훅 출력 JSON)과 `decide gate --show [이름] [--json]`.
+/// `decide gate <이름>`(stdin 훅 입력 → 훅 출력 JSON), `decide gate --show [이름] [--json]`,
+/// `decide gate stats [--since 24h|7d|all] [--json]`. `stats`는 게이트 이름이 아니라 예약어다.
 fn run_gate(args: Vec<String>) {
     match args.first().map(String::as_str) {
         Some("--show") => run_gate_show(&args[1..]),
+        Some("stats") => run_gate_stats(&args[1..]),
         Some(name) if !name.starts_with('-') && args.len() == 1 => {
             if name != decide::gate::config::BASH_RISK {
                 eprintln!("알 수 없는 게이트입니다: {name}");
@@ -137,9 +139,60 @@ fn run_gate(args: Vec<String>) {
             }
         }
         _ => {
-            eprintln!("사용법: decide gate <이름> | decide gate --show [이름] [--json]");
+            eprintln!(
+                "사용법: decide gate <이름> | decide gate --show [이름] [--json] | decide gate stats [--since 24h|7d|all] [--json]"
+            );
             std::process::exit(2);
         }
+    }
+}
+
+/// `decide gate stats [--since 24h|7d|all] [--json]`: 감사 로그를 집계해 보여 준다. 로그를 바꾸지 않는다.
+fn run_gate_stats(args: &[String]) {
+    use decide::gate::{client, config, stats};
+    let usage = || -> ! {
+        eprintln!("사용법: decide gate stats [--since 24h|7d|all] [--json]");
+        std::process::exit(2);
+    };
+    let (mut since, mut json, mut since_given) = (stats::Since::All, false, false);
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
+        match arg.as_str() {
+            "--json" => json = true,
+            "--since" if !since_given => {
+                since_given = true;
+                match rest.next().map(|value| stats::parse_since(value)) {
+                    Some(Ok(parsed)) => since = parsed,
+                    Some(Err(message)) => {
+                        eprintln!("{message}");
+                        usage()
+                    }
+                    None => usage(),
+                }
+            }
+            _ => usage(),
+        }
+    }
+    let ctx = gate_context();
+    let path = client::audit_path(ctx.home.as_deref());
+    let log = path.as_ref().and_then(|path| std::fs::read_to_string(path).ok());
+    if log.is_none() && !json {
+        let shown = path.map(|path| path.display().to_string()).unwrap_or_else(|| "~/.cache/decide/gate.log".into());
+        println!("감사 로그가 아직 없습니다 ({shown}). 게이트가 판정을 하면 쌓입니다.");
+        return;
+    }
+    let (records, skipped) = stats::parse_log(log.as_deref().unwrap_or(""));
+    let loaded = config::load_from_disk(ctx.home.as_deref(), &ctx.fallback_cwd);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0);
+    let mut summary = stats::summarize(&records, now, since, loaded.config.bash_risk.confidence);
+    summary.skipped_lines = skipped;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&stats::to_json(&summary)).unwrap_or_default());
+    } else {
+        println!("{}", stats::render(&summary));
     }
 }
 
