@@ -61,6 +61,54 @@ const DEFAULT_PREFILTER: [&str; 12] = [
     "which",
 ];
 
+/// 모델 없이 `deny`로 확정하는 기본 규칙. 되돌릴 수 없고 거의 항상 의도하지 않은 명령만 둔다. 글롭 문법과 한계는
+/// `gate::rules`를 본다(`\*`는 글자 별표, 끝의 ` *`는 인자 없는 경우도 맞춘다).
+const DEFAULT_DENY: [&str; 29] = [
+    // 루트와 홈 전체 삭제, 루트 권한 개방
+    "rm -* / *", "rm -* /\\*", "rm -* ~ *", "rm -* ~/ *", "rm -* ~/\\*", "rm -* $home *", "rm -* $home/ *",
+    "rm -* $home/\\*", "chmod -* * / *",
+    // 디스크와 파일시스템, 포크 폭탄
+    "dd * of=/dev/*", "mkfs*", "diskutil erase*", "diskutil secure*", "shred * /dev/*", "*:(){*:|:&*};:*",
+    // 원격 스크립트를 셸에 파이프
+    "curl * | sh *", "curl * | bash *", "curl * | sudo sh *", "curl * | sudo bash *",
+    "wget * | sh *", "wget * | bash *", "wget * | sudo sh *", "wget * | sudo bash *",
+    // 데이터베이스 통째 삭제, 루트 전체에서 삭제
+    "psql *drop database*", "mysql *drop database*", "mongosh *dropdatabase*", "redis-cli *flushall*",
+    "find / *-delete*", "find / *-exec rm*",
+];
+
+/// 모델 없이 `ask`로 확정하는 기본 규칙. 의도일 수 있지만 확인이 필요한 명령이다.
+const DEFAULT_ASK: [&str; 12] = [
+    // 강제 푸시(`--force-with-lease`는 더 안전한 변형이라 뺀다), 추적되지 않는 파일 삭제, 저장하지 않은 작업 폐기
+    "git push --force *", "git push * --force *", "git push -f *", "git push * -f *", "git clean -*f*",
+    "git reset --hard*",
+    // 개인 키와 자격증명 파일(공개 키 `.pub`는 이름이 달라 걸리지 않는다)
+    "*/.ssh/id_rsa *", "*/.ssh/id_ed25519 *", "*/.ssh/id_ecdsa *", "*/.aws/credentials *", "*/.netrc *",
+    "*/.pgpass *",
+];
+
+/// 최상위 시스템 디렉터리. 이 디렉터리 자체의 삭제와 권한 변경 규칙을 만든다(`/usr/local/...` 같은 하위 경로의
+/// 삭제는 일반 작업일 수 있어 삭제 규칙에서는 뺀다).
+const SYSTEM_DIRS: [&str; 8] = ["/etc", "/usr", "/bin", "/sbin", "/var", "/system", "/library", "/applications"];
+
+/// `.env`를 읽거나 복사하는 명령. `.env.example` 같은 다른 이름은 걸리지 않는다.
+const ENV_READERS: [&str; 8] = ["cat", "head", "tail", "less", "bat", "cp", "scp", "base64"];
+
+fn default_deny_patterns() -> Vec<String> {
+    let mut patterns: Vec<String> = DEFAULT_DENY.iter().map(|pattern| pattern.to_string()).collect();
+    for dir in SYSTEM_DIRS {
+        patterns.push(format!("rm -* {dir} *"));
+        patterns.push(format!("chmod -* * {dir}*"));
+    }
+    patterns
+}
+
+fn default_ask_patterns() -> Vec<String> {
+    let mut patterns: Vec<String> = DEFAULT_ASK.iter().map(|pattern| pattern.to_string()).collect();
+    patterns.extend(ENV_READERS.iter().map(|reader| format!("{reader} *.env *")));
+    patterns
+}
+
 /// 설정 키 이름. `sources`의 키이기도 하다.
 pub const KEYS: [&str; 9] = [
     "mode",
@@ -84,8 +132,8 @@ pub fn builtin() -> Config {
             deny: 0.7,
             confidence: 0.7,
             prefilter: DEFAULT_PREFILTER.iter().map(|entry| entry.to_string()).collect(),
-            deny_patterns: Vec::new(),
-            ask_patterns: Vec::new(),
+            deny_patterns: default_deny_patterns(),
+            ask_patterns: default_ask_patterns(),
         },
     }
 }
@@ -304,7 +352,8 @@ fn apply_bash_risk(layer: &mut Layer, body: &Value, repo: bool) {
     apply_patterns(layer, body, "ask_patterns", repo, |c| &mut c.ask_patterns);
 }
 
-/// 규칙 목록 하나를 병합한다. 사용자 층은 통째로 바꿀 수 있고, 저장소 층은 기존 항목을 모두 지킨 채 더하기만 할 수 있다.
+/// 규칙 목록 하나를 병합한다. 사용자 층은 통째로 바꿀 수 있고(기본 규칙을 뺄 수도 있다), 저장소 층은 적은 항목을 기존
+/// 목록에 더하기만 한다(합집합). 저장소가 기본 규칙을 다시 적을 필요도, 뺄 방법도 없다.
 fn apply_patterns(
     layer: &mut Layer,
     body: &Value,
@@ -324,11 +373,16 @@ fn apply_patterns(
     let key = format!("bash-risk.{field}");
     match entries {
         Some(entries) if repo => {
-            let current = list(&mut layer.loaded.config.bash_risk).clone();
-            if current.iter().all(|entry| entries.contains(entry)) {
-                layer.set(&key, |c| *list(&mut c.bash_risk) = entries.clone());
-            } else {
-                layer.refuse(field, "저장소는 규칙을 뺄 수 없습니다(더하기만 가능)");
+            let mut merged = list(&mut layer.loaded.config.bash_risk).clone();
+            let before = merged.len();
+            for entry in entries {
+                if !merged.contains(&entry) {
+                    merged.push(entry);
+                }
+            }
+            // 새로 더한 항목이 없으면 값도 출처도 그대로 둔다.
+            if merged.len() > before {
+                layer.set(&key, |c| *list(&mut c.bash_risk) = merged.clone());
             }
         }
         Some(entries) => layer.set(&key, |c| *list(&mut c.bash_risk) = entries.clone()),
@@ -604,26 +658,37 @@ mod tests {
     }
 
     #[test]
-    fn the_repo_layer_can_only_add_rules() {
+    fn the_repo_layer_adds_rules_to_the_current_list_and_can_never_remove() {
         let user = r#"{"gates": {"bash-risk": {"deny_patterns": ["a*", "b*"]}}}"#;
-        // 기존 항목을 모두 지키고 더하는 것은 허용한다.
-        let more = r#"{"gates": {"bash-risk": {"deny_patterns": ["a*", "b*", "c*"], "ask_patterns": ["x*"]}}}"#;
-        let result = loaded(Some(user), Some(more));
+        // 저장소가 적은 항목이 기존 목록 뒤에 더해진다. 저장소 목록에 없는 기존 항목도 그대로 남는다.
+        let repo = r#"{"gates": {"bash-risk": {"deny_patterns": ["c*"], "ask_patterns": ["x*"]}}}"#;
+        let result = loaded(Some(user), Some(repo));
         assert_eq!(result.config.bash_risk.deny_patterns, patterns(&["a*", "b*", "c*"]));
-        assert_eq!(result.config.bash_risk.ask_patterns, patterns(&["x*"]));
+        let ask = &result.config.bash_risk.ask_patterns;
+        assert_eq!(ask.last().map(String::as_str), Some("x*"));
+        assert_eq!(&ask[..ask.len() - 1], builtin().bash_risk.ask_patterns.as_slice(), "내장 기본 규칙은 그대로다");
         assert_eq!(result.sources["bash-risk.deny_patterns"], Source::Repo);
+        assert_eq!(result.sources["bash-risk.ask_patterns"], Source::Repo);
         assert!(result.warnings.is_empty(), "{:?}", result.warnings);
-        // 기존 항목을 빼는 것은 거부하고 경고한다.
-        let fewer = r#"{"gates": {"bash-risk": {"deny_patterns": ["a*"]}}}"#;
-        let result = loaded(Some(user), Some(fewer));
+        // 이미 있는 항목만 적으면 아무것도 바뀌지 않고 출처도 그대로다.
+        let same = r#"{"gates": {"bash-risk": {"deny_patterns": ["a*"]}}}"#;
+        let result = loaded(Some(user), Some(same));
         assert_eq!(result.config.bash_risk.deny_patterns, patterns(&["a*", "b*"]));
         assert_eq!(result.sources["bash-risk.deny_patterns"], Source::User);
-        assert!(has_warning(&result, "deny_patterns"), "{:?}", result.warnings);
-        // 항목을 바꿔 치우는 것도 마찬가지다.
-        let swapped = r#"{"gates": {"bash-risk": {"deny_patterns": ["a*", "z*"]}}}"#;
-        let result = loaded(Some(user), Some(swapped));
-        assert_eq!(result.config.bash_risk.deny_patterns, patterns(&["a*", "b*"]));
-        assert!(has_warning(&result, "deny_patterns"), "{:?}", result.warnings);
+        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+        // 중복은 한 번만 더해진다.
+        let dup = r#"{"gates": {"bash-risk": {"deny_patterns": ["a*", "c*", "c*"]}}}"#;
+        let result = loaded(Some(user), Some(dup));
+        assert_eq!(result.config.bash_risk.deny_patterns, patterns(&["a*", "b*", "c*"]));
+    }
+
+    #[test]
+    fn the_builtin_rules_are_not_empty_and_have_a_builtin_source() {
+        let result = loaded(None, None);
+        assert!(!result.config.bash_risk.deny_patterns.is_empty());
+        assert!(!result.config.bash_risk.ask_patterns.is_empty());
+        assert_eq!(result.sources["bash-risk.deny_patterns"], Source::Builtin);
+        assert!(result.warnings.is_empty());
     }
 
     #[test]
