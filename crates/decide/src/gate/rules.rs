@@ -357,6 +357,8 @@ mod tests {
             "cat ~/.ssh/id_rsa", "cat ~/.ssh/id_ecdsa", "cp ~/.ssh/id_ed25519 /tmp/k", "tail ~/.aws/credentials",
             "cat ~/.netrc", "less ~/.pgpass", "ssh -i ~/.ssh/id_rsa prod",
             "cat .env", "head -n 3 .env", "cat ./.env", "cat backend/.env", "base64 .env", "cp .env /tmp/e",
+            // 사전 필터에 있는 읽기 명령으로도 비밀 파일을 읽을 수 있다
+            "grep SECRET .env", "rg API_KEY ./.env", "jq . .env",
         ] {
             table.push((command, ask));
         }

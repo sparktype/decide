@@ -91,8 +91,9 @@ const DEFAULT_ASK: [&str; 12] = [
 /// 삭제는 일반 작업일 수 있어 삭제 규칙에서는 뺀다).
 const SYSTEM_DIRS: [&str; 8] = ["/etc", "/usr", "/bin", "/sbin", "/var", "/system", "/library", "/applications"];
 
-/// `.env`를 읽거나 복사하는 명령. `.env.example` 같은 다른 이름은 걸리지 않는다.
-const ENV_READERS: [&str; 8] = ["cat", "head", "tail", "less", "bat", "cp", "scp", "base64"];
+/// `.env`를 읽거나 복사하는 명령. `.env.example` 같은 다른 이름은 걸리지 않는다. `grep`·`rg`·`jq`는 사전 필터에
+/// 있는 읽기 명령이라 규칙이 먼저 잡지 않으면 비밀 파일을 조용히 읽고 건너뛰어진다.
+const ENV_READERS: [&str; 11] = ["cat", "head", "tail", "less", "bat", "cp", "scp", "base64", "grep", "rg", "jq"];
 
 fn default_deny_patterns() -> Vec<String> {
     let mut patterns: Vec<String> = DEFAULT_DENY.iter().map(|pattern| pattern.to_string()).collect();
