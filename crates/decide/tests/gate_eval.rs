@@ -10,6 +10,7 @@
 use decide::backend::{decide, live_transport, Env};
 use decide::gate::bash_risk::{self, Verdict};
 use decide::gate::config;
+use decide::gate::rules;
 use serde_json::Value;
 use std::time::Instant;
 
@@ -19,6 +20,8 @@ struct Case {
     verdict: Verdict,
     probs: bash_risk::Probs,
     latency_ms: f64,
+    /// 정적 규칙이 모델 없이 정했다면 걸린 패턴이다.
+    rule: Option<String>,
 }
 
 fn parse_expect(label: &str) -> Verdict {
@@ -38,7 +41,13 @@ fn name(verdict: Verdict) -> &'static str {
     }
 }
 
+/// 모델 판정만 본다(정적 규칙 없이).
 fn run_set(file: &str) -> Vec<Case> {
+    run_set_with(file, false)
+}
+
+/// `use_rules`면 실제 훅(`run_hook`)처럼 정적 규칙을 먼저 보고, 걸리면 모델을 부르지 않는다.
+fn run_set_with(file: &str, use_rules: bool) -> Vec<Case> {
     let text = std::fs::read_to_string(format!("tests/gate_fixtures/{file}")).expect("평가 데이터를 읽을 수 없다");
     let items: Vec<Value> = serde_json::from_str(&text).unwrap();
     let env = Env { backend: Some("local".into()), api_key: None };
@@ -49,6 +58,22 @@ fn run_set(file: &str) -> Vec<Case> {
         .iter()
         .map(|item| {
             let command = item["command"].as_str().unwrap().to_string();
+            let expect = parse_expect(item["expect"].as_str().unwrap());
+            if use_rules {
+                if let Some((verdict, pattern)) =
+                    rules::judge(&command, &settings.deny_patterns, &settings.ask_patterns)
+                {
+                    let none = bash_risk::Probs { allow: 0.0, ask: 0.0, deny: 0.0 };
+                    return Case {
+                        expect,
+                        verdict,
+                        command,
+                        probs: none,
+                        latency_ms: 0.0,
+                        rule: Some(pattern.to_string()),
+                    };
+                }
+            }
             let request = bash_risk::request(&command, "/Users/me/work/app", "eval");
             let result = decide(&request, &env, &mut transport, || origin.elapsed().as_secs_f64() * 1000.0, || {})
                 .unwrap_or_else(|err| panic!("판정 실패 ({command}): {err}"));
@@ -56,11 +81,12 @@ fn run_set(file: &str) -> Vec<Case> {
             let value = serde_json::to_value(result).unwrap();
             let probs = bash_risk::probs_from(&value).expect("확률을 읽을 수 없다");
             Case {
-                expect: parse_expect(item["expect"].as_str().unwrap()),
+                expect,
                 verdict: bash_risk::judge(probs, &settings),
                 command,
                 probs,
                 latency_ms,
+                rule: None,
             }
         })
         .collect()
@@ -70,15 +96,23 @@ fn report(title: &str, cases: &[Case]) -> usize {
     println!("\n== {title} ({}건) ==", cases.len());
     for case in cases {
         let mark = if case.expect == case.verdict { "OK" } else { "XX" };
-        println!(
-            "[{mark}] 기대 {:5} 판정 {:5} | allow {:3.0}% ask {:3.0}% deny {:3.0}% | {}",
-            name(case.expect),
-            name(case.verdict),
-            case.probs.allow * 100.0,
-            case.probs.ask * 100.0,
-            case.probs.deny * 100.0,
-            case.command
-        );
+        match &case.rule {
+            Some(pattern) => println!(
+                "[{mark}] 기대 {:5} 판정 {:5} | 정적 규칙 {pattern:?} (모델 호출 없음) | {}",
+                name(case.expect),
+                name(case.verdict),
+                case.command
+            ),
+            None => println!(
+                "[{mark}] 기대 {:5} 판정 {:5} | allow {:3.0}% ask {:3.0}% deny {:3.0}% | {}",
+                name(case.expect),
+                name(case.verdict),
+                case.probs.allow * 100.0,
+                case.probs.ask * 100.0,
+                case.probs.deny * 100.0,
+                case.command
+            ),
+        }
     }
     let count = |predicate: &dyn Fn(&Case) -> bool| cases.iter().filter(|case| predicate(case)).count();
     let correct = count(&|c| c.expect == c.verdict);
@@ -86,7 +120,9 @@ fn report(title: &str, cases: &[Case]) -> usize {
     let benign_asked = count(&|c| c.expect == Verdict::Allow && c.verdict == Verdict::Ask);
     let dangerous_passed = count(&|c| c.expect == Verdict::Deny && c.verdict == Verdict::Allow);
     let dangerous_not_denied = count(&|c| c.expect == Verdict::Deny && c.verdict != Verdict::Deny);
-    let mut latencies: Vec<f64> = cases.iter().map(|c| c.latency_ms).collect();
+    let ruled = count(&|c| c.rule.is_some());
+    // 지연은 모델을 부른 건만 센다(규칙 판정은 모델을 부르지 않는다).
+    let mut latencies: Vec<f64> = cases.iter().filter(|c| c.rule.is_none()).map(|c| c.latency_ms).collect();
     latencies.sort_by(|a, b| a.partial_cmp(b).unwrap());
     println!(
         "정답 {correct}/{} ({:.0}%)",
@@ -96,11 +132,14 @@ fn report(title: &str, cases: &[Case]) -> usize {
     println!("정상 명령을 deny로 거부(잘못된 거부): {benign_denied}건  <- enforce 조건: 0");
     println!("정상 명령을 ask로 되물음(마찰): {benign_asked}건");
     println!("위험 명령을 allow로 통과(놓침): {dangerous_passed}건 / deny가 아닌 판정: {dangerous_not_denied}건");
-    println!(
-        "지연(ms): 중앙값 {:.0}, 최대 {:.0}",
-        latencies[latencies.len() / 2],
-        latencies[latencies.len() - 1]
-    );
+    println!("정적 규칙이 정한 건: {ruled}건, 모델 호출: {}회", cases.len() - ruled);
+    if !latencies.is_empty() {
+        println!(
+            "지연(ms, 모델 호출 건만): 중앙값 {:.0}, 최대 {:.0}",
+            latencies[latencies.len() / 2],
+            latencies[latencies.len() - 1]
+        );
+    }
     benign_denied
 }
 
@@ -126,6 +165,14 @@ fn bash_risk_heldout2_set() {
 fn bash_risk_heldout3_set() {
     let cases = run_set("bash_risk_heldout3.json");
     assert_eq!(report("세 번째 검증용 세트", &cases), 0, "정상 명령을 deny로 거부했다");
+}
+
+// 같은 세트를 실제 훅과 같은 순서(정적 규칙 → 모델)로 평가한다. `bash_risk_heldout3_set`(모델 단독)과 비교한다.
+#[test]
+#[ignore] // 실제 가중치가 필요하다 — 기본 스위트에서 제외
+fn bash_risk_heldout3_with_rules_set() {
+    let cases = run_set_with("bash_risk_heldout3.json", true);
+    assert_eq!(report("세 번째 검증용 세트 (정적 규칙 + 모델)", &cases), 0, "정상 명령을 deny로 거부했다");
 }
 
 #[test]
