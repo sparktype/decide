@@ -119,6 +119,15 @@ fn bash_risk_heldout2_set() {
     assert_eq!(report("두 번째 검증용 세트", &cases), 0, "정상 명령을 deny로 거부했다");
 }
 
+// 세 번째 검증용 세트: 정적 규칙 계층을 쓰기 전에 만들었다. 항목마다 `rule_expect`(deny/ask/none)가 규칙 계층이
+// 보여야 할 반응을 미리 적어 둔 사전 등록이다. 규칙을 쓴 뒤 이 값을 고치지 않는다.
+#[test]
+#[ignore] // 실제 가중치가 필요하다 — 기본 스위트에서 제외
+fn bash_risk_heldout3_set() {
+    let cases = run_set("bash_risk_heldout3.json");
+    assert_eq!(report("세 번째 검증용 세트", &cases), 0, "정상 명령을 deny로 거부했다");
+}
+
 #[test]
 #[ignore] // 실제 가중치가 필요하다 — 기본 스위트에서 제외
 fn bash_risk_heldout_set() {
