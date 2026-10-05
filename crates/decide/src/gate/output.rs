@@ -71,6 +71,19 @@ fn display_name(display: Display) -> &'static str {
     }
 }
 
+/// `--show`가 규칙 종류마다 보이는 줄 수 상한. 기본 규칙이 많아 전부 나열하면 화면을 채운다.
+const SHOWN_RULES: usize = 8;
+
+/// 규칙 목록을 줄로 만든다. 상한을 넘으면 나머지 개수와 전체를 보는 방법을 한 줄로 알린다.
+fn rule_lines(kind: &str, patterns: &[String]) -> Vec<String> {
+    let mut lines: Vec<String> =
+        patterns.iter().take(SHOWN_RULES).map(|pattern| format!("  {kind:<5} {pattern}")).collect();
+    if patterns.len() > SHOWN_RULES {
+        lines.push(format!("  … {kind} 외 {}개 (--json으로 전체 목록)", patterns.len() - SHOWN_RULES));
+    }
+    lines
+}
+
 /// 설정 키 하나의 값을 사람이 읽는 문자열로 만든다.
 fn value_text(config: &Config, key: &str) -> String {
     match key {
@@ -144,8 +157,8 @@ pub fn show_gate(loaded: &Loaded, name: &str, json: bool) -> Option<String> {
         config.bash_risk.deny_patterns.len(),
         config.bash_risk.ask_patterns.len()
     ));
-    lines.extend(config.bash_risk.deny_patterns.iter().map(|pattern| format!("  deny  {pattern}")));
-    lines.extend(config.bash_risk.ask_patterns.iter().map(|pattern| format!("  ask   {pattern}")));
+    lines.extend(rule_lines("deny", &config.bash_risk.deny_patterns));
+    lines.extend(rule_lines("ask", &config.bash_risk.ask_patterns));
     lines.push("값과 출처:".to_string());
     for key in config::KEYS {
         let source = loaded.sources.get(key).copied().unwrap_or(config::Source::Builtin);
@@ -481,6 +494,23 @@ mod tests {
         let value: Value = serde_json::from_str(&show_gate(&loaded, "bash-risk", true).unwrap()).unwrap();
         assert_eq!(value["config"]["gates"]["bash-risk"]["deny_patterns"], json!(["*mkfs*"]));
         assert_eq!(value["sources"]["bash-risk.ask_patterns"], "사용자");
+    }
+
+    #[test]
+    fn show_truncates_long_rule_lists_and_the_json_has_them_all() {
+        let loaded = crate::gate::config::load(None, None);
+        let rules = &loaded.config.bash_risk;
+        let text = show_gate(&loaded, "bash-risk", false).unwrap();
+        assert_eq!(text.lines().filter(|line| line.starts_with("  deny  ")).count(), 8, "{text}");
+        assert_eq!(text.lines().filter(|line| line.starts_with("  ask   ")).count(), 8, "{text}");
+        let more_deny = rules.deny_patterns.len() - 8;
+        let more_ask = rules.ask_patterns.len() - 8;
+        assert!(text.contains(&format!("  … deny 외 {more_deny}개 (--json으로 전체 목록)")), "{text}");
+        assert!(text.contains(&format!("  … ask 외 {more_ask}개 (--json으로 전체 목록)")), "{text}");
+        let value: Value = serde_json::from_str(&show_gate(&loaded, "bash-risk", true).unwrap()).unwrap();
+        let listed = &value["config"]["gates"]["bash-risk"];
+        assert_eq!(listed["deny_patterns"].as_array().unwrap().len(), rules.deny_patterns.len());
+        assert_eq!(listed["ask_patterns"].as_array().unwrap().len(), rules.ask_patterns.len());
     }
 
     #[test]
