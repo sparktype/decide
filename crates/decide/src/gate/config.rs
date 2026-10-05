@@ -68,7 +68,7 @@ const DEFAULT_DENY: [&str; 29] = [
     "rm -* / *", "rm -* /\\*", "rm -* ~ *", "rm -* ~/ *", "rm -* ~/\\*", "rm -* $home *", "rm -* $home/ *",
     "rm -* $home/\\*", "chmod -* * / *",
     // 디스크와 파일시스템, 포크 폭탄
-    "dd * of=/dev/*", "mkfs*", "diskutil erase*", "diskutil secure*", "shred * /dev/*", "*:(){*:|:&*};:*",
+    "dd * of=/dev/*", "mkfs*", "diskutil erase*", "diskutil secure*", "shred * /dev/*", "*:(){*:|:&*}*",
     // 원격 스크립트를 셸에 파이프
     "curl * | sh *", "curl * | bash *", "curl * | sudo sh *", "curl * | sudo bash *",
     "wget * | sh *", "wget * | bash *", "wget * | sudo sh *", "wget * | sudo bash *",
