@@ -107,6 +107,7 @@ Claude Code PostToolUse 훅이다. stdin의 훅 입력에서 decide의
 사용법:
   decide gate <이름>
   decide gate --show [이름] [--json]
+  decide gate stats [--since 24h|7d|all] [--json]
 
 Claude Code PreToolUse 훅에서 decide로 판정한다.
 게이트: bash-risk (Bash 명령의 위험 판정)
@@ -119,6 +120,10 @@ Claude Code PreToolUse 훅에서 decide로 판정한다.
                  정적 규칙과 값마다의 출처를 보여준다.
   --json         --show <이름>과 함께 쓴다. 설정 파일에 그대로
                  복사할 수 있는 JSON으로 낸다.
+  stats          감사 로그(gate.log)를 집계해 판정 방식, 판정 분포,
+                 지연, 시간 초과, 규칙 적중을 보여준다. --since로
+                 기간(24h, 7d, all)을 거르고 --json은 JSON으로 낸다.
+                 로그를 바꾸지 않는다.
 
 정적 규칙: gates.bash-risk.deny_patterns, ask_patterns(글롭, *만
 지원)에 걸리는 명령은 모델을 부르지 않고 deny 또는 ask로 정한다.
@@ -195,7 +200,10 @@ mod tests {
         let install = for_command("install").unwrap();
         assert!(install.contains("--claude") && install.contains("settings.json"), "{install}");
         let gate = for_command("gate").unwrap();
-        for needle in ["bash-risk", "--show", "--json", "감사 모드", "gates.json"] {
+        for needle in [
+            "bash-risk", "--show", "--json", "감사 모드", "gates.json", "decide gate stats", "--since", "gate.log",
+            "24h",
+        ] {
             assert!(gate.contains(needle), "{needle}가 없다:\n{gate}");
         }
         let daemon = for_command("daemon").unwrap();

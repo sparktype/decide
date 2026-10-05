@@ -211,3 +211,105 @@ fn unknown_commands_exit_two_with_a_hint_to_the_help() {
     assert!(bad_option.stderr.contains("decide --help"), "{}", bad_option.stderr);
     let _ = std::fs::remove_dir_all(&home);
 }
+
+/// 임시 HOME에 감사 로그를 만든다. 로그가 없는 홈이 필요하면 `lines`를 `None`으로 준다.
+fn stats_home(label: &str, lines: Option<&[String]>) -> std::path::PathBuf {
+    let home = std::env::temp_dir().join(format!(
+        "decide-stats-{label}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    ));
+    std::fs::create_dir_all(home.join(".cache/decide")).unwrap();
+    if let Some(lines) = lines {
+        std::fs::write(home.join(".cache/decide/gate.log"), lines.join("\n") + "\n").unwrap();
+    }
+    home
+}
+
+fn log_line(ts: u64, kind: &str) -> String {
+    let base = r#""gate": "bash-risk", "mode": "audit", "command": "x""#;
+    match kind {
+        "judged" => format!(
+            r#"{{"ts": {ts}, {base}, "verdict": "allow", "probs": {{"allow": 0.9, "ask": 0.05, "deny": 0.05}}, "backend": "local", "model": "m", "latency_ms": 1000.0, "prefiltered": false, "failure": null}}"#
+        ),
+        "prefiltered" => format!(
+            r#"{{"ts": {ts}, {base}, "verdict": null, "probs": null, "prefiltered": true, "failure": null}}"#
+        ),
+        _ => format!(
+            r#"{{"ts": {ts}, {base}, "verdict": "deny", "probs": null, "prefiltered": false, "rule": "mkfs*", "failure": null}}"#
+        ),
+    }
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()
+}
+
+fn run_stats(home: &std::path::Path, args: &[&str]) -> std::process::Output {
+    Command::new(env!("CARGO_BIN_EXE_decide"))
+        .args(["gate", "stats"])
+        .args(args)
+        .env("HOME", home)
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn gate_stats_summarizes_the_audit_log() {
+    let now = now_secs();
+    let lines = [log_line(now - 60, "judged"), log_line(now - 50, "prefiltered"), log_line(now - 40, "rule")];
+    let home = stats_home("ok", Some(&lines));
+    let output = run_stats(&home, &[]);
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let text = String::from_utf8_lossy(&output.stdout);
+    for needle in ["총 3건", "정적 규칙   1건", "사전 필터   1건", "모델 판정   1건", "local: n=1", "mkfs*"] {
+        assert!(text.contains(needle), "{needle:?}가 없다:\n{text}");
+    }
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn gate_stats_json_is_valid_and_matches_the_counts() {
+    let now = now_secs();
+    let home = stats_home("json", Some(&[log_line(now - 60, "judged"), log_line(now - 40, "rule")]));
+    let output = run_stats(&home, &["--json"]);
+    assert!(output.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(value["total"], 2);
+    assert_eq!(value["kinds"]["rule"], 1);
+    assert_eq!(value["latency"]["local"]["n"], 1);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn gate_stats_since_filters_old_records_and_reports_when_none_remain() {
+    let home = stats_home("since", Some(&[log_line(now_secs() - 30 * 86_400, "judged")]));
+    let recent = run_stats(&home, &["--since", "24h"]);
+    assert!(recent.status.success());
+    assert!(String::from_utf8_lossy(&recent.stdout).contains("기록이 없습니다"));
+    let all = run_stats(&home, &["--since", "all"]);
+    assert!(String::from_utf8_lossy(&all.stdout).contains("총 1건"));
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn gate_stats_without_a_log_says_so_and_exits_zero() {
+    let home = stats_home("none", None);
+    let output = run_stats(&home, &[]);
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("감사 로그가 아직 없습니다"));
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn gate_stats_rejects_bad_arguments_with_exit_two() {
+    let home = stats_home("bad", None);
+    let cases: [&[&str]; 5] =
+        [&["--since", "bogus"], &["--since"], &["--nope"], &["extra"], &["--since", "24h", "--since", "7d"]];
+    for args in cases {
+        let output = run_stats(&home, args);
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("사용법"), "{args:?}");
+    }
+    let _ = std::fs::remove_dir_all(&home);
+}
