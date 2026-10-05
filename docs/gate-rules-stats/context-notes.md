@@ -71,3 +71,10 @@
 - 사실: 이 릴리스의 목적은 사용자가 감사 모드로 통계를 모을 수 있게 설치본에 `decide gate stats`와 정적 규칙을 반영하는 것이다(사용자 결정).
 - 후속(이번 범위 밖): tap과 formula 사본 끝의 빈 줄 제거(앞서 기록), 사전 필터의 `git branch -D` 약점, 메타문자 연결 확장, `claude::tests::temp_dir` 이름 경합.
 - 남은 절차: PR 머지(사용자) → `v0.5.0` 태그(확인) → 워크플로 → 공개 자산 검증 → 릴리스 본문 → tap 갱신(확인) → formula 사본 동기화 PR.
+
+## 2026-10-05 (v0.5.0 릴리스 완료, tap과 사본 동기화)
+- 사실: `v0.5.0`을 `b732c91`(PR #40 머지)에 태그해 워크플로가 성공했다. 공개 자산 체크섬(`125cfee0…`)이 `checksums.txt`와 일치하고 압축 파일에 `decide`와 `mlx.metallib`이 있으며 `decide --version`이 `decide 0.5.0`이다. 격리된 환경에서 공개 바이너리로 실제 모델 검증 25개 항목이 모두 통과했다: 정적 규칙이 데몬 없이 약 12ms에 판정하고 데몬을 띄우지 않으며, `cat .env`·`grep SECRET .env`는 ask, `cd /tmp && sudo rm -rf /`는 deny, 따옴표 안의 위험 문구는 건드리지 않고, 확대된 사전 필터는 조용하며, `gate stats`가 규칙 4건·사전 필터 6건을 정확히 세고, 모델 판정 경로도 동작한다.
+- 사실: tap(`sparktype/homebrew-tap`)에 `ded6488`로 v0.5.0 formula를 푸시했다(사용자 승인, 조건부 갱신). 올린 뒤 바이트 단위로 다시 읽어(`cmp`) 의도한 파일과 동일함을 확인했고, `brew info`가 `0.4.1 → stable 0.5.0`을 인식한다.
+- 정정(지난 실수 해소): v0.4.1 때 `gh api --jq`가 출력 끝에 붙인 개행을 그대로 올려 tap의 `decide.rb`가 `end\n\n`로 끝났다. 이번에 tap을 `--jq .content | base64 -d`로 바이트 그대로 읽어 세 줄(url, sha256, version)을 바꾸고 끝 빈 줄을 한 줄 지운 뒤 `diff`와 문법 검사(`ruby -c`)로 확인하고 올렸다. 저장소 사본도 tap과 같은 내용(`end\n`)으로 맞췄다.
+- 교훈(재확인): 외부 파일을 읽어 고쳐 올릴 때는 읽는 도구가 붙이는 개행을 의심하고, 올리기 전에 바이트 단위로 대조한다. 이번에는 올린 뒤에도 `cmp`로 확인했다.
+- 남은 일: 사용자가 `brew upgrade sparktype/tap/decide`를 실행하고 감사 모드로 로그를 모은 뒤 `decide gate stats --since 7d`로 `ask` 비율, 낮은 확신 비율(이전 91%), 시간 초과 비율(이전 약 10%), 규칙 적중을 본다. 그 뒤 `confidence` 조정과 사전 필터의 메타문자 연결 확장(읽기 명령만 이어 붙인 호출을 건너뛰기)을 결정한다. 별도 후속: `git branch -D` 약점, `claude::tests::temp_dir` 이름 경합, 모델 실패 시 위험어면 ask, `decide doctor`와 `install --check/--uninstall`.
