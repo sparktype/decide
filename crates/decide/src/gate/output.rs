@@ -139,6 +139,13 @@ pub fn show_gate(loaded: &Loaded, name: &str, json: bool) -> Option<String> {
         config.bash_risk.prefilter.join(", "),
         config.bash_risk.prefilter.len()
     ));
+    lines.push(format!(
+        "정적 규칙: deny {}개, ask {}개 (걸리면 모델 없이 확정, 사전 필터보다 먼저 본다)",
+        config.bash_risk.deny_patterns.len(),
+        config.bash_risk.ask_patterns.len()
+    ));
+    lines.extend(config.bash_risk.deny_patterns.iter().map(|pattern| format!("  deny  {pattern}")));
+    lines.extend(config.bash_risk.ask_patterns.iter().map(|pattern| format!("  ask   {pattern}")));
     lines.push("값과 출처:".to_string());
     for key in config::KEYS {
         let source = loaded.sources.get(key).copied().unwrap_or(config::Source::Builtin);
@@ -458,6 +465,22 @@ mod tests {
         let reloaded = crate::gate::config::load(Some(&value["config"].to_string()), None);
         assert_eq!(reloaded.config, loaded.config, "config를 그대로 복사하면 같은 설정이어야 한다");
         assert!(reloaded.warnings.is_empty(), "{:?}", reloaded.warnings);
+    }
+
+    #[test]
+    fn show_lists_the_static_rules_with_their_sources() {
+        let user = r#"{"gates": {"bash-risk": {
+            "deny_patterns": ["*mkfs*"], "ask_patterns": ["*clean -fd*", "*.env"]}}}"#;
+        let loaded = crate::gate::config::load(Some(user), None);
+        let text = show_gate(&loaded, "bash-risk", false).unwrap();
+        assert!(text.contains("정적 규칙: deny 1개, ask 2개"), "{text}");
+        assert!(text.contains("  deny  *mkfs*"), "{text}");
+        assert!(text.contains("  ask   *clean -fd*") && text.contains("  ask   *.env"), "{text}");
+        assert!(text.contains("bash-risk.deny_patterns = 1개 (사용자)"), "{text}");
+        assert!(text.contains("bash-risk.ask_patterns = 2개 (사용자)"), "{text}");
+        let value: Value = serde_json::from_str(&show_gate(&loaded, "bash-risk", true).unwrap()).unwrap();
+        assert_eq!(value["config"]["gates"]["bash-risk"]["deny_patterns"], json!(["*mkfs*"]));
+        assert_eq!(value["sources"]["bash-risk.ask_patterns"], "사용자");
     }
 
     #[test]
