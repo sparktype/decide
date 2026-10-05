@@ -1,4 +1,13 @@
 // 정적 규칙: 글롭 패턴(`*`만 지원)으로 명령을 모델 없이 확정적으로 판정하는 계층
+use crate::gate::bash_risk::Verdict;
+
+/// deny 목록을 먼저, 다음에 ask 목록을 본다. 걸리는 규칙이 있으면 `(판정, 패턴)`이다. 규칙이 없으면 `None`이고
+/// 그때는 사전 필터와 모델이 판정한다.
+pub fn judge<'a>(command: &str, deny: &'a [String], ask: &'a [String]) -> Option<(Verdict, &'a str)> {
+    first_match(deny, command)
+        .map(|pattern| (Verdict::Deny, pattern))
+        .or_else(|| first_match(ask, command).map(|pattern| (Verdict::Ask, pattern)))
+}
 
 /// 글롭 패턴이 명령 전체와 맞는지 본다. `*`는 0자 이상의 아무 문자열이고 나머지는 글자 그대로다(정규식 문자는
 /// 해석하지 않는다). 비교 전에 둘 다 소문자로 바꾸고 연속된 공백을 하나로 접는다. 빈 패턴은 아무것에도 맞지 않는다.
@@ -117,6 +126,16 @@ mod tests {
     fn non_ascii_text_is_matched_by_characters() {
         assert!(glob_match("*삭제*", "echo 파일 삭제 테스트"));
         assert!(!glob_match("*삭제*", "echo 파일 생성"));
+    }
+
+    #[test]
+    fn judge_checks_deny_before_ask_and_names_the_pattern() {
+        let deny = list(&["*mkfs*"]);
+        let ask = list(&["*clean -fd*", "*mkfs*"]);
+        assert_eq!(judge("sudo mkfs.ext4 /dev/sda", &deny, &ask), Some((Verdict::Deny, "*mkfs*")), "deny가 먼저다");
+        assert_eq!(judge("git clean -fdx", &deny, &ask), Some((Verdict::Ask, "*clean -fd*")));
+        assert_eq!(judge("ls -la", &deny, &ask), None);
+        assert_eq!(judge("ls", &[], &[]), None);
     }
 
     #[test]

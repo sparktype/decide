@@ -13,6 +13,8 @@ pub enum Kind {
     Judged { verdict: Verdict, probs: Probs, result: Value },
     /// 데몬 연결 실패, 시간 초과, 백엔드 오류 등으로 판정 없이 통과했다.
     Failed { reason: String },
+    /// 정적 규칙(글롭 패턴)이 모델을 부르지 않고 `Deny` 또는 `Ask`로 확정했다.
+    Rule { verdict: Verdict, pattern: String },
 }
 
 #[derive(Debug, Clone)]
@@ -154,6 +156,7 @@ pub fn show_gate(loaded: &Loaded, name: &str, json: bool) -> Option<String> {
 pub fn hook_output(outcome: &Outcome) -> Option<Value> {
     let decision = match (&outcome.kind, outcome.mode) {
         (Kind::Judged { verdict, probs, .. }, Mode::Enforce) => permission(*verdict, probs, &outcome.gate),
+        (Kind::Rule { verdict, pattern }, Mode::Enforce) => rule_permission(*verdict, pattern, &outcome.gate),
         _ => None,
     };
     let message = message(outcome);
@@ -184,6 +187,16 @@ fn permission(verdict: Verdict, probs: &Probs, gate: &str) -> Option<(&'static s
     Some((decision, format!("decide gate {gate}: {meaning} ({})", ranked(probs))))
 }
 
+/// 정적 규칙 판정을 enforce 모드에서 Claude Code에 넘길 `(permissionDecision, 이유)`. `Allow`는 `None`이다.
+fn rule_permission(verdict: Verdict, pattern: &str, gate: &str) -> Option<(&'static str, String)> {
+    let decision = match verdict {
+        Verdict::Allow => return None,
+        Verdict::Ask => "ask",
+        Verdict::Deny => "deny",
+    };
+    Some((decision, format!("decide gate {gate}: 정적 규칙 `{pattern}`에 걸렸습니다 (판정: {decision}, 모델 호출 없음)")))
+}
+
 /// 사용자에게 보여 줄 근거 문구. 표시 방식(`display`)과 결과 종류에 따라 없을 수 있다.
 fn message(outcome: &Outcome) -> Option<String> {
     let head = format!("🛡 decide gate {}:", outcome.gate);
@@ -209,6 +222,13 @@ fn message(outcome: &Outcome) -> Option<String> {
                 mode_text(outcome.mode, *verdict),
                 ranked(probs),
                 footer(result),
+            )
+        }
+        Kind::Rule { verdict, pattern } if *verdict != Verdict::Allow && outcome.display != Display::Off => {
+            format!(
+                "{head} {} ({})\n   근거: 정적 규칙 `{pattern}` (모델 호출 없음)\n   대상: {command}",
+                verdict_label(*verdict),
+                mode_text(outcome.mode, *verdict),
             )
         }
         _ => return None,
@@ -451,6 +471,44 @@ mod tests {
     fn the_message_names_the_question_the_model_was_asked() {
         let text = message(&hook_output(&judged(Verdict::Ask, Mode::Audit, Display::Decisions)));
         assert!(text.contains(QUESTION));
+    }
+
+    fn ruled(verdict: Verdict, mode: Mode, display: Display) -> Outcome {
+        Outcome {
+            gate: "bash-risk".into(),
+            mode,
+            display,
+            command: "sudo mkfs.ext4 /dev/sda".into(),
+            kind: Kind::Rule { verdict, pattern: "*mkfs*".into() },
+            warnings: 0,
+        }
+    }
+
+    #[test]
+    fn audit_rule_shows_the_pattern_without_a_question_or_probabilities() {
+        let output = hook_output(&ruled(Verdict::Deny, Mode::Audit, Display::Decisions));
+        let expected = "🛡 decide gate bash-risk: deny (감사 모드 — 막지 않음)\n   근거: 정적 규칙 `*mkfs*` (모델 호출 없음)\n   대상: sudo mkfs.ext4 /dev/sda";
+        assert_eq!(message(&output), expected);
+        assert!(output.unwrap().get("hookSpecificOutput").is_none(), "감사 모드는 판정을 내리면 안 된다");
+    }
+
+    #[test]
+    fn enforce_rule_makes_a_permission_decision_naming_the_pattern() {
+        for (verdict, decision) in [(Verdict::Deny, "deny"), (Verdict::Ask, "ask")] {
+            let output = hook_output(&ruled(verdict, Mode::Enforce, Display::Decisions)).unwrap();
+            assert_eq!(output["hookSpecificOutput"]["permissionDecision"], decision);
+            let reason = output["hookSpecificOutput"]["permissionDecisionReason"].as_str().unwrap();
+            assert!(reason.contains("정적 규칙 `*mkfs*`") && reason.contains(decision), "{reason}");
+            assert!(output["systemMessage"].as_str().unwrap().contains("enforce"), "{output}");
+        }
+    }
+
+    #[test]
+    fn display_off_hides_the_rule_message_but_enforce_still_decides() {
+        assert!(hook_output(&ruled(Verdict::Deny, Mode::Audit, Display::Off)).is_none());
+        let output = hook_output(&ruled(Verdict::Deny, Mode::Enforce, Display::Off)).unwrap();
+        assert_eq!(output["hookSpecificOutput"]["permissionDecision"], "deny");
+        assert!(output.get("systemMessage").is_none(), "{output}");
     }
 
     #[test]
