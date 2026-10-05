@@ -9,38 +9,74 @@ pub fn judge<'a>(command: &str, deny: &'a [String], ask: &'a [String]) -> Option
         .or_else(|| first_match(ask, command).map(|pattern| (Verdict::Ask, pattern)))
 }
 
+/// 패턴 한 글자. `*`는 와일드카드, 나머지는 글자 그대로다.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Token {
+    Star,
+    Literal(char),
+}
+
+/// 비교용으로 정규화한 패턴을 토큰으로 나눈다. `\*`는 글자 `*`, `\\`는 글자 `\`이고 다른 글자 앞의 `\`는 그대로 둔다.
+fn tokenize(pattern: &str) -> Vec<Token> {
+    let mut tokens = Vec::new();
+    let mut chars = pattern.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '*' => tokens.push(Token::Star),
+            '\\' if matches!(chars.peek(), Some('*') | Some('\\')) => {
+                tokens.push(Token::Literal(chars.next().unwrap_or('\\')))
+            }
+            other => tokens.push(Token::Literal(other)),
+        }
+    }
+    tokens
+}
+
 /// 글롭 패턴이 명령 전체와 맞는지 본다. `*`는 0자 이상의 아무 문자열이고 나머지는 글자 그대로다(정규식 문자는
-/// 해석하지 않는다). 비교 전에 둘 다 소문자로 바꾸고 연속된 공백을 하나로 접는다. 빈 패턴은 아무것에도 맞지 않는다.
+/// 해석하지 않고, `\*`로 글자 `*`를 쓴다). 패턴 끝의 ` *`(공백+별)는 인자가 없는 경우도 맞춘다 — `git push *`는
+/// `git push`에도 맞는다. 비교 전에 둘 다 소문자로 바꾸고 연속된 공백을 하나로 접는다. 빈 패턴은 아무것에도
+/// 맞지 않는다.
 pub fn glob_match(pattern: &str, text: &str) -> bool {
-    let pattern: Vec<char> = normalize(pattern).chars().collect();
-    if pattern.is_empty() {
+    let normalized = normalize(pattern);
+    if normalized.is_empty() {
         return false;
     }
+    let tokens = tokenize(&normalized);
     let text: Vec<char> = normalize(text).chars().collect();
+    if matches_tokens(&tokens, &text) {
+        return true;
+    }
+    let n = tokens.len();
+    n >= 3 && tokens[n - 2..] == [Token::Literal(' '), Token::Star] && matches_tokens(&tokens[..n - 2], &text)
+}
+
+fn matches_tokens(pattern: &[Token], text: &[char]) -> bool {
     // 마지막 `*`의 위치와, 그 `*`가 지금까지 삼킨 글자 수를 기억했다가 실패하면 하나 더 삼키고 다시 시도한다.
     let (mut p, mut t) = (0, 0);
     let mut star: Option<usize> = None;
     let mut swallowed = 0;
     while t < text.len() {
-        if p < pattern.len() && pattern[p] == '*' {
-            star = Some(p);
-            swallowed = t;
-            p += 1;
-        } else if p < pattern.len() && pattern[p] == text[t] {
-            p += 1;
-            t += 1;
-        } else if let Some(star) = star {
-            p = star + 1;
-            swallowed += 1;
-            t = swallowed;
-        } else {
-            return false;
+        match pattern.get(p) {
+            Some(Token::Star) => {
+                star = Some(p);
+                swallowed = t;
+                p += 1;
+            }
+            Some(Token::Literal(c)) if *c == text[t] => {
+                p += 1;
+                t += 1;
+            }
+            _ => match star {
+                Some(star) => {
+                    p = star + 1;
+                    swallowed += 1;
+                    t = swallowed;
+                }
+                None => return false,
+            },
         }
     }
-    while p < pattern.len() && pattern[p] == '*' {
-        p += 1;
-    }
-    p == pattern.len()
+    pattern[p..].iter().all(|token| *token == Token::Star)
 }
 
 /// 목록에서 명령에 처음 맞는 패턴. 없으면 `None`이다.
@@ -70,11 +106,33 @@ mod tests {
     }
 
     #[test]
-    fn a_trailing_star_matches_any_rest() {
+    fn a_trailing_space_star_matches_any_arguments_or_none() {
         assert!(glob_match("git push *", "git push origin main"));
         assert!(glob_match("git push *", "git push --force origin x"));
         assert!(!glob_match("git push *", "git pushx"), "공백 뒤에서만 이어진다");
-        assert!(!glob_match("git push *", "git push"), "패턴의 공백까지 있어야 한다");
+        assert!(glob_match("git push *", "git push"), "끝의 ` *`는 인자가 없는 경우도 맞춘다");
+        assert!(glob_match("rm -* / *", "rm -rf /"));
+        assert!(glob_match("rm -* / *", "rm -rf / --no-preserve-root"));
+        assert!(!glob_match("rm -* / *", "rm -rf /tmp/x"), "경로가 이어지면 다르다");
+        assert!(!glob_match("ls *", "lsof"));
+    }
+
+    #[test]
+    fn a_trailing_star_without_a_space_still_needs_the_prefix_text() {
+        assert!(glob_match("git push*", "git push"));
+        assert!(glob_match("git push*", "git pushx"), "공백 없는 `*`는 글자 그대로 이어진다");
+        assert!(!glob_match("git push*", "git pus"));
+    }
+
+    #[test]
+    fn a_backslash_makes_a_star_literal() {
+        assert!(glob_match("rm -* /\\*", "rm -rf /*"));
+        assert!(!glob_match("rm -* /\\*", "rm -rf /tmp"), "`\\*`는 와일드카드가 아니다");
+        assert!(!glob_match("rm -* /\\*", "rm -rf /"));
+        assert!(glob_match("a\\\\b", "a\\b"), "`\\\\`는 역슬래시 하나다");
+        assert!(glob_match("echo \\*", "echo *"), "끝의 `\\*`는 마지막 와일드카드가 아니라 글자다");
+        assert!(!glob_match("echo \\*", "echo"));
+        assert!(glob_match("a\\b", "a\\b"), "다른 글자 앞의 역슬래시는 그대로 둔다");
     }
 
     #[test]
