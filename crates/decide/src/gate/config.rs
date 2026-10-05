@@ -34,6 +34,10 @@ pub struct GateConfig {
     pub confidence: f64,
     /// 데몬을 부르지 않고 건너뛰는 명령 앞부분(적을수록 엄격).
     pub prefilter: Vec<String>,
+    /// 모델 없이 `deny`로 확정하는 명령 글롭 패턴(많을수록 엄격).
+    pub deny_patterns: Vec<String>,
+    /// 모델 없이 `ask`로 확정하는 명령 글롭 패턴(많을수록 엄격).
+    pub ask_patterns: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -58,7 +62,7 @@ const DEFAULT_PREFILTER: [&str; 12] = [
 ];
 
 /// 설정 키 이름. `sources`의 키이기도 하다.
-pub const KEYS: [&str; 7] = [
+pub const KEYS: [&str; 9] = [
     "mode",
     "display",
     "timeout_ms",
@@ -66,6 +70,8 @@ pub const KEYS: [&str; 7] = [
     "bash-risk.deny",
     "bash-risk.confidence",
     "bash-risk.prefilter",
+    "bash-risk.deny_patterns",
+    "bash-risk.ask_patterns",
 ];
 
 pub fn builtin() -> Config {
@@ -78,6 +84,8 @@ pub fn builtin() -> Config {
             deny: 0.7,
             confidence: 0.7,
             prefilter: DEFAULT_PREFILTER.iter().map(|entry| entry.to_string()).collect(),
+            deny_patterns: Vec::new(),
+            ask_patterns: Vec::new(),
         },
     }
 }
@@ -118,6 +126,8 @@ pub fn to_json(config: &Config) -> Value {
                 "enabled": config.bash_risk.enabled,
                 "thresholds": {"deny": config.bash_risk.deny, "confidence": config.bash_risk.confidence},
                 "prefilter": config.bash_risk.prefilter,
+                "deny_patterns": config.bash_risk.deny_patterns,
+                "ask_patterns": config.bash_risk.ask_patterns,
             }
         }
     })
@@ -290,6 +300,40 @@ fn apply_bash_risk(layer: &mut Layer, body: &Value, repo: bool) {
             None => layer.invalid("prefilter", "문자열 배열이어야 합니다"),
         }
     }
+    apply_patterns(layer, body, "deny_patterns", repo, |c| &mut c.deny_patterns);
+    apply_patterns(layer, body, "ask_patterns", repo, |c| &mut c.ask_patterns);
+}
+
+/// 규칙 목록 하나를 병합한다. 사용자 층은 통째로 바꿀 수 있고, 저장소 층은 기존 항목을 모두 지킨 채 더하기만 할 수 있다.
+fn apply_patterns(
+    layer: &mut Layer,
+    body: &Value,
+    field: &str,
+    repo: bool,
+    list: fn(&mut GateConfig) -> &mut Vec<String>,
+) {
+    let Some(value) = body.get(field) else {
+        return;
+    };
+    let entries: Option<Vec<String>> = value.as_array().and_then(|items| {
+        items
+            .iter()
+            .map(|item| item.as_str().filter(|text| !text.trim().is_empty()).map(str::to_string))
+            .collect()
+    });
+    let key = format!("bash-risk.{field}");
+    match entries {
+        Some(entries) if repo => {
+            let current = list(&mut layer.loaded.config.bash_risk).clone();
+            if current.iter().all(|entry| entries.contains(entry)) {
+                layer.set(&key, |c| *list(&mut c.bash_risk) = entries.clone());
+            } else {
+                layer.refuse(field, "저장소는 규칙을 뺄 수 없습니다(더하기만 가능)");
+            }
+        }
+        Some(entries) => layer.set(&key, |c| *list(&mut c.bash_risk) = entries.clone()),
+        None => layer.invalid(field, "비어 있지 않은 문자열 배열이어야 합니다"),
+    }
 }
 
 fn probability(value: &Value) -> Option<f64> {
@@ -357,11 +401,15 @@ mod tests {
             "gates": {"bash-risk": {
                 "enabled": false,
                 "thresholds": {"deny": 0.8, "confidence": 0.4},
-                "prefilter": ["ls", "pwd", "make test"]
+                "prefilter": ["ls", "pwd", "make test"],
+                "deny_patterns": ["*mkfs*"],
+                "ask_patterns": ["*clean -fd*"]
             }}
         }"#;
         let result = loaded(Some(user), None);
         let config = &result.config;
+        assert_eq!(config.bash_risk.deny_patterns, vec!["*mkfs*"]);
+        assert_eq!(config.bash_risk.ask_patterns, vec!["*clean -fd*"]);
         assert_eq!(config.mode, Mode::Enforce);
         assert_eq!(config.display, Display::All);
         assert_eq!(config.timeout_ms, 5000);
@@ -537,5 +585,77 @@ mod tests {
         assert_eq!(result.sources["display"], Source::User);
         assert_eq!(result.sources["bash-risk.confidence"], Source::User);
         assert_eq!(result.sources["mode"], Source::Builtin);
+    }
+
+    fn patterns(items: &[&str]) -> Vec<String> {
+        items.iter().map(|item| item.to_string()).collect()
+    }
+
+    #[test]
+    fn the_user_layer_replaces_the_rule_lists_and_is_their_source() {
+        let user = r#"{"gates": {"bash-risk": {
+            "deny_patterns": ["*drop database*", "*mkfs*"], "ask_patterns": ["git push*--force*"]}}}"#;
+        let result = loaded(Some(user), None);
+        assert_eq!(result.config.bash_risk.deny_patterns, patterns(&["*drop database*", "*mkfs*"]));
+        assert_eq!(result.config.bash_risk.ask_patterns, patterns(&["git push*--force*"]));
+        assert_eq!(result.sources["bash-risk.deny_patterns"], Source::User);
+        assert_eq!(result.sources["bash-risk.ask_patterns"], Source::User);
+        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+    }
+
+    #[test]
+    fn the_repo_layer_can_only_add_rules() {
+        let user = r#"{"gates": {"bash-risk": {"deny_patterns": ["a*", "b*"]}}}"#;
+        // 기존 항목을 모두 지키고 더하는 것은 허용한다.
+        let more = r#"{"gates": {"bash-risk": {"deny_patterns": ["a*", "b*", "c*"], "ask_patterns": ["x*"]}}}"#;
+        let result = loaded(Some(user), Some(more));
+        assert_eq!(result.config.bash_risk.deny_patterns, patterns(&["a*", "b*", "c*"]));
+        assert_eq!(result.config.bash_risk.ask_patterns, patterns(&["x*"]));
+        assert_eq!(result.sources["bash-risk.deny_patterns"], Source::Repo);
+        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+        // 기존 항목을 빼는 것은 거부하고 경고한다.
+        let fewer = r#"{"gates": {"bash-risk": {"deny_patterns": ["a*"]}}}"#;
+        let result = loaded(Some(user), Some(fewer));
+        assert_eq!(result.config.bash_risk.deny_patterns, patterns(&["a*", "b*"]));
+        assert_eq!(result.sources["bash-risk.deny_patterns"], Source::User);
+        assert!(has_warning(&result, "deny_patterns"), "{:?}", result.warnings);
+        // 항목을 바꿔 치우는 것도 마찬가지다.
+        let swapped = r#"{"gates": {"bash-risk": {"deny_patterns": ["a*", "z*"]}}}"#;
+        let result = loaded(Some(user), Some(swapped));
+        assert_eq!(result.config.bash_risk.deny_patterns, patterns(&["a*", "b*"]));
+        assert!(has_warning(&result, "deny_patterns"), "{:?}", result.warnings);
+    }
+
+    #[test]
+    fn invalid_rule_lists_are_ignored_with_a_warning() {
+        for body in [
+            r#"{"deny_patterns": "*mkfs*"}"#,
+            r#"{"deny_patterns": [1, 2]}"#,
+            r#"{"deny_patterns": ["*mkfs*", ""]}"#,
+            r#"{"deny_patterns": ["   "]}"#,
+            r#"{"ask_patterns": {"a": "b"}}"#,
+        ] {
+            let user = format!(r#"{{"gates": {{"bash-risk": {body}}}}}"#);
+            let result = loaded(Some(&user), None);
+            assert_eq!(result.config.bash_risk.deny_patterns, builtin().bash_risk.deny_patterns, "{body}");
+            assert_eq!(result.config.bash_risk.ask_patterns, builtin().bash_risk.ask_patterns, "{body}");
+            assert!(has_warning(&result, "_patterns"), "{body}: {:?}", result.warnings);
+        }
+    }
+
+    #[test]
+    fn rule_lists_survive_a_round_trip_through_to_json() {
+        let user = r#"{"gates": {"bash-risk": {"deny_patterns": ["*mkfs*"], "ask_patterns": ["*clean -fd*", "*.env"]}}}"#;
+        let first = loaded(Some(user), None).config;
+        let json = to_json(&first);
+        assert_eq!(json["gates"]["bash-risk"]["deny_patterns"], serde_json::json!(["*mkfs*"]));
+        let again = loaded(Some(&json.to_string()), None).config;
+        assert_eq!(again, first);
+    }
+
+    #[test]
+    fn the_rule_lists_have_source_keys() {
+        assert!(KEYS.contains(&"bash-risk.deny_patterns"));
+        assert!(KEYS.contains(&"bash-risk.ask_patterns"));
     }
 }

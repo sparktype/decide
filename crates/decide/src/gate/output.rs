@@ -79,6 +79,8 @@ fn value_text(config: &Config, key: &str) -> String {
         "bash-risk.deny" => config.bash_risk.deny.to_string(),
         "bash-risk.confidence" => config.bash_risk.confidence.to_string(),
         "bash-risk.prefilter" => format!("{}개", config.bash_risk.prefilter.len()),
+        "bash-risk.deny_patterns" => format!("{}개", config.bash_risk.deny_patterns.len()),
+        "bash-risk.ask_patterns" => format!("{}개", config.bash_risk.ask_patterns.len()),
         _ => "?".to_string(),
     }
 }
