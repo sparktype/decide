@@ -4,6 +4,7 @@ pub mod client;
 pub mod config;
 pub mod output;
 pub mod rules;
+pub mod stats;
 
 use output::{Kind, Outcome};
 use serde_json::{json, Value};
