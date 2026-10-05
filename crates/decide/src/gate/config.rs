@@ -56,9 +56,19 @@ pub struct Loaded {
     pub warnings: Vec<String>,
 }
 
-const DEFAULT_PREFILTER: [&str; 12] = [
+/// 모델을 부르지 않고 건너뛰는 읽기 전용 명령. 기준은 인자로 파일을 쓰거나 지우거나 보낼 수 없고 목적상 비밀을 드러내지
+/// 않는 것이다. 그래서 `find`(`-delete`, `-exec`), `sort`·`uniq`(`-o`), `sed`·`awk`, `env`, `docker logs`,
+/// `kubectl get`(`get secret -o yaml`이 비밀을 낸다)은 뺐고 `kubectl get`은 종류를 명시해 둔다. 비밀 파일을 읽는
+/// 경우는 정적 규칙이 사전 필터보다 먼저 잡는다. 사전 필터는 셸 메타문자가 있는 명령을 건너뛰지 않는다.
+const DEFAULT_PREFILTER: [&str; 39] = [
     "git status", "git diff", "git log", "git show", "git branch", "ls", "pwd", "cat", "head", "tail", "wc",
     "which",
+    "grep", "rg", "jq", "tree", "file", "stat", "du", "df", "ps", "whoami", "date", "uname", "echo",
+    "docker ps", "docker images",
+    "kubectl get pods", "kubectl get nodes", "kubectl get services", "kubectl get deployments",
+    "kubectl get namespaces",
+    "git rev-parse", "git ls-files", "git blame", "git shortlog", "git describe", "git stash list",
+    "git remote -v",
 ];
 
 /// 모델 없이 `deny`로 확정하는 기본 규칙. 되돌릴 수 없고 거의 항상 의도하지 않은 명령만 둔다. 글롭 문법과 한계는
@@ -91,8 +101,9 @@ const DEFAULT_ASK: [&str; 12] = [
 /// 삭제는 일반 작업일 수 있어 삭제 규칙에서는 뺀다).
 const SYSTEM_DIRS: [&str; 8] = ["/etc", "/usr", "/bin", "/sbin", "/var", "/system", "/library", "/applications"];
 
-/// `.env`를 읽거나 복사하는 명령. `.env.example` 같은 다른 이름은 걸리지 않는다.
-const ENV_READERS: [&str; 8] = ["cat", "head", "tail", "less", "bat", "cp", "scp", "base64"];
+/// `.env`를 읽거나 복사하는 명령. `.env.example` 같은 다른 이름은 걸리지 않는다. `grep`·`rg`·`jq`는 사전 필터에
+/// 있는 읽기 명령이라 규칙이 먼저 잡지 않으면 비밀 파일을 조용히 읽고 건너뛰어진다.
+const ENV_READERS: [&str; 11] = ["cat", "head", "tail", "less", "bat", "cp", "scp", "base64", "grep", "rg", "jq"];
 
 fn default_deny_patterns() -> Vec<String> {
     let mut patterns: Vec<String> = DEFAULT_DENY.iter().map(|pattern| pattern.to_string()).collect();
@@ -442,7 +453,7 @@ mod tests {
         assert!(result.config.bash_risk.enabled);
         assert_eq!(result.config.bash_risk.deny, 0.7);
         assert_eq!(result.config.bash_risk.confidence, 0.7);
-        assert_eq!(result.config.bash_risk.prefilter.len(), 12);
+        assert_eq!(result.config.bash_risk.prefilter.len(), DEFAULT_PREFILTER.len());
         assert!(result.sources.values().all(|source| *source == Source::Builtin));
         assert_eq!(result.sources.len(), KEYS.len());
         assert!(result.warnings.is_empty());
@@ -632,7 +643,7 @@ mod tests {
         assert_eq!(config.timeout_ms, 2000);
         assert_eq!(config.bash_risk.deny, 0.7);
         assert_eq!(config.bash_risk.confidence, 0.6);
-        assert_eq!(config.bash_risk.prefilter.len(), 12);
+        assert_eq!(config.bash_risk.prefilter.len(), DEFAULT_PREFILTER.len());
         for needle in ["mode", "timeout_ms", "deny", "prefilter", "no-such-gate"] {
             assert!(has_warning(&result, needle), "{needle} 경고가 없다: {:?}", result.warnings);
         }

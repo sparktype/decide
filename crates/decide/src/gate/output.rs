@@ -71,6 +71,9 @@ fn display_name(display: Display) -> &'static str {
     }
 }
 
+/// `--show`가 사전 필터에서 보이는 항목 수 상한. 나머지는 개수만 알린다.
+const SHOWN_PREFILTER: usize = 12;
+
 /// `--show`가 규칙 종류마다 보이는 줄 수 상한. 기본 규칙이 많아 전부 나열하면 화면을 채운다.
 const SHOWN_RULES: usize = 8;
 
@@ -147,11 +150,14 @@ pub fn show_gate(loaded: &Loaded, name: &str, json: bool) -> Option<String> {
         config.bash_risk.deny, config.bash_risk.confidence
     ));
     lines.push(format!("모드:     {}", value_text(config, "mode")));
-    lines.push(format!(
-        "사전 필터: {} ({}개)",
-        config.bash_risk.prefilter.join(", "),
-        config.bash_risk.prefilter.len()
-    ));
+    let prefilter = &config.bash_risk.prefilter;
+    let shown = prefilter.iter().take(SHOWN_PREFILTER).cloned().collect::<Vec<_>>().join(", ");
+    let more = if prefilter.len() > SHOWN_PREFILTER {
+        format!(", … 외 {}개", prefilter.len() - SHOWN_PREFILTER)
+    } else {
+        String::new()
+    };
+    lines.push(format!("사전 필터: {shown}{more} ({}개)", prefilter.len()));
     lines.push(format!(
         "정적 규칙: deny {}개, ask {}개 (걸리면 모델 없이 확정, 사전 필터보다 먼저 본다)",
         config.bash_risk.deny_patterns.len(),
@@ -457,7 +463,8 @@ mod tests {
             assert!(text.contains(line), "{line:?}가 없다:\n{text}");
         }
         assert!(text.contains("사전 필터: git status, git diff"), "{text}");
-        assert!(text.contains("(12개)"), "{text}");
+        let count = crate::gate::config::builtin().bash_risk.prefilter.len();
+        assert!(text.contains(&format!("({count}개)")), "{text}");
         assert!(text.contains("bash-risk.deny = 0.8 (사용자)"), "{text}");
         assert!(text.contains("mode = audit (내장 기본값)"), "{text}");
     }
@@ -507,6 +514,9 @@ mod tests {
         let more_ask = rules.ask_patterns.len() - 8;
         assert!(text.contains(&format!("  … deny 외 {more_deny}개 (--json으로 전체 목록)")), "{text}");
         assert!(text.contains(&format!("  … ask 외 {more_ask}개 (--json으로 전체 목록)")), "{text}");
+        let total = rules.prefilter.len();
+        assert!(total > 12, "기본 사전 필터가 12개를 넘어야 줄임 표시를 시험할 수 있다");
+        assert!(text.contains(&format!(", … 외 {}개 ({total}개)", total - 12)), "{text}");
         let value: Value = serde_json::from_str(&show_gate(&loaded, "bash-risk", true).unwrap()).unwrap();
         let listed = &value["config"]["gates"]["bash-risk"];
         assert_eq!(listed["deny_patterns"].as_array().unwrap().len(), rules.deny_patterns.len());
