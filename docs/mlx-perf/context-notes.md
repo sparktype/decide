@@ -46,3 +46,12 @@
 - 제외: NeoHorse-Jev-4B(state 384토큰 제한, MLX 없음), Nimble-9B-v3(CC BY-NC), JEV-27B(54GB), Kev-27B(51GB, 32GB Mac에 불가).
 - 결정: Kev는 TypeSafe `/v1/systemone`과 같은 형식이라 `decide` 코드는 `DECIDE_TYPESAFE_URL` 한 줄로 연결한다(`live_transport`). 키는 비어 있지 않은 임의 값(예: `local`)을 `TYPESAFE_API_KEY`로 준다.
 - 미완: Kev 서버 실행(`uv run --extra serve python -m kev.serve --run jaredpalmer/kev-4b --port 8009`)은 자동 모드 분류기가 외부 코드 실행으로 거부했다. 사용자 승인 뒤에 이어서 측정한다. 의존성(`uv sync --extra serve`)은 scratchpad의 클론에 설치돼 있다.
+
+## 2026-10-06 (Kev-4B 스파이크 실측, M1 Max 64GB)
+- 구성: `kev.serve --run jaredpalmer/kev-4b`(MLX bf16, 접두 캐시 4개)를 로컬에 띄우고 `DECIDE_BACKEND=typesafe DECIDE_TYPESAFE_URL=http://127.0.0.1:8009/v1/systemone TYPESAFE_API_KEY=local`로 `decide`를 연결했다. `decide` 코드 변경 없이 `decide_many`가 끝까지 동작한다. 응답의 `routing.model`은 `jev-latest`로 나온다(Kev가 별칭을 그대로 돌려줌, 표시만 헷갈림).
+- 사실(정상 상태, 새 state): 긴 state(약 865토큰) 질문 4개 약 1040~1140ms, 짧은 state 질문 2개 약 180ms, 질문 1개 약 160ms. 같은 state를 다시 보내면 서버 캐시로 195ms(긴 state 4개)·101ms(짧은 state 2개). 첫 호출은 워밍업이 섞여 2862ms였다. 서버 RSS 약 5.3GB.
+- 비교(같은 입력, Clef-flash 8bit 이 Mac 기존 실측): 긴 state 4개 3767ms 대 Kev 약 1.1초(약 3.5배), 짧은 state 2개 1005ms 대 약 180ms(약 5.5배), 질문 1개 약 500ms 대 약 160ms(약 3배). 호출 사이 같은 state는 Kev가 캐시해서 Clef-flash에는 없는 이득이 있다.
+- 사실(골든 5케이스, 판단 일치): noul 2건 중 1건 일치(결제 시스템 마비는 일치, "서버가 다운됐습니다"는 Clef 0.254 대 Kev 0.686으로 반대편), choice "중복 결제" 일치(billing), score 기대값 차이 0.32(1레벨 이내), 11옵션 숫자 라벨 질문은 Kev 1위 확률 0.134로 거의 균등이라 판단 불능에 가깝다. 표본이 5건이라 통계적 근거는 약하다. "서버가 다운됐습니다"는 상식적으로 긴급이라 Clef 오라클이 오히려 낮게 낸 쪽이다.
+- 사실: Kev는 확률이 덜 극단적이다(긴 state urgent Clef 0.957 대 Kev 0.761). 임계값은 새로 보정해야 한다.
+- 추정(M2 Pro 32GB, 연산 약 0.65배라 지연 약 1.5배): Kev-4B 긴 state 4개 약 1.6초, 짧은 state 2개 약 0.27초. Clef-flash는 각각 약 5.6초, 약 1.5초. 메모리는 둘 다 32GB에 여유 있게 들어간다.
+- 결론: 응답 성능 우선이면 Kev-4B가 3~5배 빠르고, 정확도는 Clef-flash보다 낮을 가능성이 크지만 이 표본으로는 확정할 수 없다. 사무실 도입 전에 실제 질문 유형으로 판단 일치율을 더 크게 재야 한다.
