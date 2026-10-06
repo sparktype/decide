@@ -189,10 +189,11 @@ fn resolve_pinned(dir: &std::path::Path) -> Result<Weights, String> {
 
 /// HuggingFace 캐시(`~/.cache/huggingface/hub`, `HF_HOME`/config.toml로 바꿀 수 있다)에서
 /// 받는다. 이미 있으면 다운로드 없이 그 경로를 쓴다. 첫 사용에는 약 10GB를 받는다.
-fn download_weights() -> Result<Weights, String> {
+/// HF_ENDPOINT/HF_HOME/HF_TOKEN 환경변수나 config.toml의 [local] 값을 반영한 HuggingFace API.
+/// `ApiBuilder::from_env()`는 HF_HOME/HF_ENDPOINT 환경변수를 반영한다. `Api::new()`는 반영하지
+/// 않는다 — 지금까지 이 환경변수들이 가중치·토크나이저 다운로드 모두에서 적용되지 않던 버그.
+fn hf_api() -> Result<hf_hub::api::sync::Api, String> {
     let resolved = resolved_hf();
-    // `ApiBuilder::from_env()`는 HF_HOME/HF_ENDPOINT 환경변수를 반영한다.
-    // `Api::new()`는 반영하지 않는다 — 지금까지 이 환경변수들이 전혀 적용되지 않던 버그.
     let mut builder = hf_hub::api::sync::ApiBuilder::from_env();
     if let Some(endpoint) = resolved.endpoint {
         builder = builder.with_endpoint(endpoint);
@@ -203,9 +204,13 @@ fn download_weights() -> Result<Weights, String> {
     if let Some(token) = resolved.token {
         builder = builder.with_token(Some(token));
     }
-    let api = builder
+    builder
         .build()
-        .map_err(|err| format!("HuggingFace API 초기화에 실패했습니다: {err}"))?;
+        .map_err(|err| format!("HuggingFace API 초기화에 실패했습니다: {err}"))
+}
+
+fn download_weights() -> Result<Weights, String> {
+    let api = hf_api()?;
     let repo = api.model(MLX_REPO.to_string());
     let fetch = |name: &str| {
         repo.get(name)
@@ -234,8 +239,7 @@ pub struct LocalTokenizer {
 
 impl LocalTokenizer {
     pub fn load() -> Result<Self, String> {
-        let api = hf_hub::api::sync::Api::new()
-            .map_err(|err| format!("HuggingFace API 초기화에 실패했습니다: {err}"))?;
+        let api = hf_api()?;
         let repo = api.model("Cloudflare/clef-flash".to_string());
         let tokenizer_path = repo
             .get("tokenizer.json")
