@@ -8,6 +8,7 @@ use std::path::PathBuf;
 pub struct FileConfig {
     pub backend: Option<String>,
     pub typesafe_api_key: Option<String>,
+    pub typesafe_url: Option<String>,
     pub local_weights: Option<String>,
     pub local_repo: Option<String>,
     pub local_hf_endpoint: Option<String>,
@@ -27,6 +28,7 @@ struct Raw {
 #[derive(Debug, Default, Deserialize)]
 struct RawTypesafe {
     api_key: Option<String>,
+    url: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -48,6 +50,7 @@ fn parse(text: &str) -> Result<FileConfig, String> {
     Ok(FileConfig {
         backend: nonblank(raw.backend),
         typesafe_api_key: nonblank(raw.typesafe.api_key),
+        typesafe_url: nonblank(raw.typesafe.url),
         local_weights: nonblank(raw.local.weights),
         local_repo: nonblank(raw.local.repo),
         local_hf_endpoint: nonblank(raw.local.hf_endpoint),
@@ -149,6 +152,7 @@ backend = "local"
 
 [typesafe]
 api_key = "sk-test"
+url = "http://127.0.0.1:8009/v1/systemone"
 
 [local]
 weights = "/path/to/weights"
@@ -163,6 +167,7 @@ hf_token = "hf-test"
         assert!(warnings.is_empty(), "{warnings:?}");
         assert_eq!(file.backend, Some("local".to_string()));
         assert_eq!(file.typesafe_api_key, Some("sk-test".to_string()));
+        assert_eq!(file.typesafe_url, Some("http://127.0.0.1:8009/v1/systemone".to_string()));
         assert_eq!(file.local_weights, Some("/path/to/weights".to_string()));
         assert_eq!(
             file.local_repo,

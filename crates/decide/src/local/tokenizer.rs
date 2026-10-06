@@ -123,6 +123,10 @@ pub enum Segment {
     OptionEnd(usize),
 }
 
+/// 질문과 무관하게 같은 앞쪽 Text 세그먼트 수(시스템 프롬프트, state, `SCHEMA FIELDS`).
+/// 이 구간의 토큰은 같은 state를 공유하는 모든 질문에서 같아서 백본 상태를 재사용할 수 있다.
+pub const SHARED_PREFIX_TEXT_SEGMENTS: usize = 3;
+
 pub fn segments(state: &str, question: &Question) -> Vec<Segment> {
     let state = truncate_state(state);
     let mut segs = Vec::new();
@@ -220,6 +224,25 @@ pub fn spans(state: &str, question: &Question) -> (QuestionSpan, Vec<OptionSpan>
 mod tests {
     use super::*;
     use crate::protocol::Question;
+
+    #[test]
+    fn leading_text_segments_are_shared_across_question_kinds() {
+        let texts = |q: &Question| -> Vec<String> {
+            segments("같은 state", q)
+                .into_iter()
+                .filter_map(|seg| if let Segment::Text(t) = seg { Some(t) } else { None })
+                .take(SHARED_PREFIX_TEXT_SEGMENTS)
+                .collect()
+        };
+        let noul = Question::Noul { instructions: "참인가?".into() };
+        let choice = Question::Choice { instructions: "어느 팀?".into(), options: vec!["a".into(), "b".into()] };
+        let score = Question::Score { instructions: "얼마나?".into(), criteria: vec!["낮음".into(), "높음".into()] };
+        assert_eq!(texts(&noul), texts(&choice));
+        assert_eq!(texts(&noul), texts(&score));
+        // 네 번째 Text부터는 질문 종류가 들어가므로 달라야 한다 — 상수가 너무 크지 않은지 확인한다.
+        let fourth = |q: &Question| segments("같은 state", q).into_iter().filter_map(|seg| if let Segment::Text(t) = seg { Some(t) } else { None }).nth(SHARED_PREFIX_TEXT_SEGMENTS);
+        assert_ne!(fourth(&noul), fourth(&choice));
+    }
 
     #[test]
     fn noul_schema_has_both_fixed_options() {

@@ -52,7 +52,7 @@ brew install sparktype/tap/decide
 ```
 
 The published formula is `Formula/decide.rb` in `sparktype/homebrew-tap`. This repo's
-`packaging/homebrew/decide.rb` records the same install. Version is 0.6.0. GitHub
+`packaging/homebrew/decide.rb` records the same install. Version is 0.7.0. GitHub
 Actions builds `crates/decide` and uploads a release asset when a `v*` tag is pushed;
 the formula downloads that prebuilt arm64 binary and installs it, no Rust toolchain
 required at install time. The release tarball holds `decide` and `mlx.metallib` (the MLX GPU
@@ -107,7 +107,9 @@ or `.claude/settings.json`, restart Claude Code.
   in a single backend call. `protocol::parse_many`/`validate_many` keep input order and
   prefix errors with `질문 "<id>": `; `typesafe::request_body_many`/`map_answers` build the
   body and pick the requested ids. All-or-nothing; no question-count cap. `decide` is unchanged.
-- `typesafe.rs` posts to `https://api.typesafe.ai/v1/systemone` with model
+- `typesafe.rs` posts to `https://api.typesafe.ai/v1/systemone` (or to `DECIDE_TYPESAFE_URL` / config.toml
+  `[typesafe].url` when set, e.g. a local Kev server that speaks the same System One format; see
+  `resolved_typesafe_url` in `backend.rs`; the key must still be non-empty) with model
   `jev-latest`. Choice criteria are `{option: option}` in insertion order. Retry 429
   and 529 once after one second. Choice above 255 options and score above 10 levels
   fail before the request.
@@ -128,6 +130,23 @@ or `.claude/settings.json`, restart Claude Code.
   `local/tokenizer.rs` assembles the Clef schema text and token spans.
   `backend::decide`/`decide_many` call `local::infer` directly — no transport,
   no `Backend::Local` arm in `typesafe::LiveTransport`.
+  `DECIDE_LOCAL_TIMING=1` makes each `infer` print one stderr line with per-stage times
+  (`local/timing.rs`: load, tokenize, backbone_eval, host_copy, head_tensors, head); it is off by
+  default and never changes the answer. `decide daemon` (`serve_default`, not `serve_unified`, so
+  tests never load the model) preloads the model on a background thread when the backend resolves to
+  local, via `local::warmup`. Measured on M1 Max, release: warm backbone is 92-94% of the call
+  (464ms at 145 tokens, 2277ms at 861), head 33-117ms, host copy under 2ms. candle uses the
+  `accelerate` feature, which halves the head on long inputs (117ms to 58ms).
+  MLX streams only work on the thread that created them, so all local work (load, preload,
+  inference) runs on one dedicated `decide-local` thread (`on_worker` in `local/mod.rs`); calling the
+  model from the daemon's UDS, HTTP, or preload threads would otherwise fail with "There is no
+  Stream(cpu, 0) in current thread". `local::infer_many` (used by `decide_many` for two or more
+  questions) computes the shared prefix once (system prompt + state + `SCHEMA FIELDS`, the first
+  `SHARED_PREFIX_TEXT_SEGMENTS` text segments) and each question continues from it: attention K/V
+  with a rope offset, gated-delta conv and delta state carried through the Metal kernel
+  (`PrefixState`, `prefill_prefix`, `hidden_states_with` in `mlx_backbone.rs`). It falls back to a
+  full pass when a question's tokens do not start with the prefix. Measured: 4 questions on an
+  865-token state take 3.8s instead of 9.6s (2.5x), answers within 0.001 of the per-question path.
 - `mcp.rs` speaks newline-delimited JSON-RPC. Tool failures are `isError` results. It
   is transport-agnostic (`handle_message(&Value, &Env, &mut T) -> Option<Value>`) and
   is reused as-is by both the stdio loop (`main.rs::run_mcp`) and `http.rs`'s HTTP handler.

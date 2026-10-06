@@ -1,6 +1,6 @@
 use crate::local;
 use crate::protocol::{
-    parse_arguments, parse_many, validate, validate_many, DecideManyResult, DecideResult,
+    parse_arguments, parse_many, validate, validate_many, DecideManyResult, DecideResult, Question,
 };
 use crate::typesafe::{self, LiveTransport, Transport};
 use serde_json::{json, Map, Value};
@@ -118,9 +118,9 @@ pub fn decide_many<T: Transport>(
     let backend = select_backend(env.backend.as_deref(), env.api_key.as_deref())?;
     if backend == Backend::Local {
         let start = millis();
+        let refs: Vec<&Question> = questions.iter().map(|(_, question)| question).collect();
         let mut answers = Map::new();
-        for (id, question) in &questions {
-            let answer = local::infer(&incoming.state, question)?;
+        for ((id, _), answer) in questions.iter().zip(local::infer_many(&incoming.state, &refs)?) {
             answers.insert(id.clone(), answer);
         }
         let latency_ms = millis() - start;
@@ -154,8 +154,18 @@ pub fn decide_many<T: Transport>(
     })
 }
 
+/// `DECIDE_TYPESAFE_URL` 환경변수, 없으면 config.toml의 `[typesafe].url`. 둘 다 없으면 None(TypeSafe 기본 주소).
+fn resolved_typesafe_url() -> Option<String> {
+    let env = std::env::var("DECIDE_TYPESAFE_URL").ok().filter(|v| !v.trim().is_empty());
+    env.or_else(|| crate::config::load_from_disk(std::env::var("HOME").ok().as_deref()).0.typesafe_url)
+}
+
 pub fn live_transport(env: &Env) -> LiveTransport {
-    LiveTransport::typesafe(nonempty(env.api_key.as_deref()).unwrap_or(""))
+    let key = nonempty(env.api_key.as_deref()).unwrap_or("");
+    match resolved_typesafe_url() {
+        Some(url) => LiveTransport::with_url(url.trim(), key),
+        None => LiveTransport::typesafe(key),
+    }
 }
 
 pub fn nonempty(value: Option<&str>) -> Option<&str> {

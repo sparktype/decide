@@ -173,8 +173,11 @@ impl FullAttention {
         })
     }
 
-    fn forward(&self, x: &Array, cfg: &Config) -> R<Array> {
+    /// `past`는 접두 구간의 (K, V) — 있으면 rope를 접두 길이만큼 밀고 K/V를 이어 붙여 어텐션한다.
+    /// 돌려주는 (K, V)는 이번 호출 구간만의 것이다(접두 캐시를 만들 때 쓴다).
+    fn forward(&self, x: &Array, cfg: &Config, past: Option<(&Array, &Array)>) -> R<(Array, (Array, Array))> {
         let len = x.shape()[1];
+        let offset = past.map_or(0, |(keys, _)| keys.shape()[2]);
         // q_proj는 헤드마다 [query(head_dim), gate(head_dim)]를 이어서 낸다.
         let q_out = self.q_proj.forward(x)?.reshape(&[1, len, cfg.heads, cfg.head_dim * 2])?;
         let parts = q_out.split_equal(2, -1)?;
@@ -185,22 +188,27 @@ impl FullAttention {
         let values = self.v_proj.forward(x)?.reshape(&[1, len, cfg.kv_heads, cfg.head_dim])?;
 
         let to_heads = |a: &Array| a.transpose_axes(&[0, 2, 1, 3]);
-        let rope = |a: &Array| fast::rope(a, cfg.rope_dims, false, cfg.rope_theta, 1.0, 0, None);
+        let rope = |a: &Array| fast::rope(a, cfg.rope_dims, false, cfg.rope_theta, 1.0, offset, None);
         let q = rope(&to_heads(&rms_norm(queries, &self.q_norm, cfg.eps)?)?)?;
         let k = rope(&to_heads(&rms_norm(&keys, &self.k_norm, cfg.eps)?)?)?;
         let v = to_heads(&values)?;
 
         let scale = (cfg.head_dim as f32).powf(-0.5);
+        let (keys_all, values_all) = match past {
+            Some((past_keys, past_values)) => (concatenate(&[past_keys, &k], 2)?, concatenate(&[past_values, &v], 2)?),
+            None => (k.clone(), v.clone()),
+        };
         let attended = fast::scaled_dot_product_attention(
             &q,
-            &k,
-            &v,
+            &keys_all,
+            &values_all,
             scale,
             fast::ScaledDotProductAttentionMask::Causal,
             None,
         )?;
         let merged = attended.transpose_axes(&[0, 2, 1, 3])?.reshape(&[1, len, cfg.heads * cfg.head_dim])?;
-        self.o_proj.forward(&ops::multiply(&merged, ops::sigmoid(&gate)?)?)
+        let out = self.o_proj.forward(&ops::multiply(&merged, ops::sigmoid(&gate)?)?)?;
+        Ok((out, (k, v)))
     }
 }
 
@@ -231,7 +239,9 @@ impl GatedDeltaNet {
         })
     }
 
-    fn forward(&self, x: &Array, cfg: &Config) -> R<Array> {
+    /// `past`는 접두 구간 끝의 (conv 상태, delta 상태). 없으면 둘 다 0에서 시작한다.
+    /// 돌려주는 상태는 이번 호출 구간 끝의 것이다.
+    fn forward(&self, x: &Array, cfg: &Config, past: Option<(&Array, &Array)>) -> R<(Array, (Array, Array))> {
         let len = x.shape()[1];
         let key_dim = cfg.lin_k_heads * cfg.lin_k_dim;
         let value_dim = cfg.lin_v_heads * cfg.lin_v_dim;
@@ -242,7 +252,9 @@ impl GatedDeltaNet {
         let b = self.in_proj_b.forward(x)?;
         let a = self.in_proj_a.forward(x)?;
 
-        let conv_out = nn::silu(depthwise_causal_conv(&qkv, &self.conv_weight, cfg.conv_kernel, conv_dim)?)?;
+        let (conv_raw, conv_state) =
+            depthwise_causal_conv(&qkv, &self.conv_weight, cfg.conv_kernel, conv_dim, past.map(|(conv, _)| conv))?;
+        let conv_out = nn::silu(conv_raw)?;
         let qkv_parts = ops::split_at_indices(&conv_out, &[key_dim, 2 * key_dim], -1)?;
         let q = qkv_parts[0].reshape(&[1, len, cfg.lin_k_heads, cfg.lin_k_dim])?;
         let k = qkv_parts[1].reshape(&[1, len, cfg.lin_k_heads, cfg.lin_k_dim])?;
@@ -263,7 +275,7 @@ impl GatedDeltaNet {
         )?)?)?;
         let beta = ops::sigmoid(b.as_dtype(Dtype::Float32)?)?;
 
-        let out = gated_delta_rule(&q, &k, &v, &g, &beta, cfg)?;
+        let (out, delta_state) = gated_delta_rule(&q, &k, &v, &g, &beta, cfg, past.map(|(_, delta)| delta))?;
         let out_dtype = x.dtype();
         // 게이트드 RMSNorm: rms_norm(out) * silu(z), 곱은 f32로 한다.
         let normed = fast::rms_norm(&out, Some(&self.norm_weight), cfg.eps)?;
@@ -272,17 +284,31 @@ impl GatedDeltaNet {
             normed.as_dtype(Dtype::Float32)?,
         )?
         .as_dtype(out_dtype)?;
-        self.out_proj.forward(&gated.reshape(&[1, len, value_dim])?)
+        let out = self.out_proj.forward(&gated.reshape(&[1, len, value_dim])?)?;
+        Ok((out, (conv_state, delta_state)))
     }
 }
 
 /// 깊이별(depthwise) causal conv1d. 커널이 4로 작아서 슬라이스 곱의 합으로 직접 계산한다 —
-/// `qkv`는 `[1, L, C]`, `weight`는 `[C, K, 1]`. 앞쪽을 0으로 K-1칸 채워 t번째 출력이
-/// 입력 t-K+1..=t만 보게 한다.
-fn depthwise_causal_conv(qkv: &Array, weight: &Array, kernel: i32, channels: i32) -> R<Array> {
+/// `qkv`는 `[1, L, C]`, `weight`는 `[C, K, 1]`. 앞쪽을 K-1칸 채워 t번째 출력이 입력 t-K+1..=t만
+/// 보게 한다. 채움은 `prev`(직전 구간의 마지막 K-1개 입력 `[1, K-1, C]`)이고, 없으면 0이다.
+/// 출력과 함께 다음 구간이 이어받을 마지막 K-1개 입력을 돌려준다.
+fn depthwise_causal_conv(
+    qkv: &Array,
+    weight: &Array,
+    kernel: i32,
+    channels: i32,
+    prev: Option<&Array>,
+) -> R<(Array, Array)> {
     let len = qkv.shape()[1];
-    let pad = ops::zeros_dtype(&[1, kernel - 1, channels], qkv.dtype())?;
-    let padded = concatenate(&[&pad, qkv], 1)?;
+    let padded = match prev {
+        Some(prev) => concatenate(&[prev, qkv], 1)?,
+        None => {
+            let pad = ops::zeros_dtype(&[1, kernel - 1, channels], qkv.dtype())?;
+            concatenate(&[&pad, qkv], 1)?
+        }
+    };
+    let next_prev = padded.index((.., len.., ..));
     let mut acc: Option<Array> = None;
     for k in 0..kernel {
         let window = padded.index((.., k..k + len, ..));
@@ -293,7 +319,7 @@ fn depthwise_causal_conv(qkv: &Array, weight: &Array, kernel: i32, channels: i32
             None => term,
         });
     }
-    Ok(acc.expect("kernel >= 1"))
+    Ok((acc.expect("kernel >= 1"), next_prev))
 }
 
 /// mlx-lm `gated_delta.py`의 기본(스칼라 게이트, 마스크 없음) Metal 커널. 스레드 하나가 상태 행
@@ -399,19 +425,30 @@ fn delta_kernel() -> &'static DeltaKernel {
 /// 게이트드 델타 규칙을 Metal 커널로 계산한다. 입력 규약은 `gated_delta_rule_ops`와 같지만
 /// `q`/`k`는 헤드를 늘리지 않은 `[1, L, Hk, Dk]`다(커널이 `hv / (Hv/Hk)`로 매핑한다).
 /// 커널은 `Dk`가 32의 배수여야 한다.
-fn gated_delta_rule(q: &Array, k: &Array, v: &Array, g: &Array, beta: &Array, cfg: &Config) -> R<Array> {
+fn gated_delta_rule(
+    q: &Array,
+    k: &Array,
+    v: &Array,
+    g: &Array,
+    beta: &Array,
+    cfg: &Config,
+    state_in: Option<&Array>,
+) -> R<(Array, Array)> {
     if cfg.lin_k_dim % 32 != 0 {
         return Err(Exception::custom("델타 커널은 linear_key_head_dim이 32의 배수여야 합니다"));
     }
     let len = q.shape()[1];
-    let state = ops::zeros::<f32>(&[1, cfg.lin_v_heads, cfg.lin_v_dim, cfg.lin_k_dim])?;
+    let state = match state_in {
+        Some(state) => state.clone(),
+        None => ops::zeros::<f32>(&[1, cfg.lin_v_heads, cfg.lin_v_dim, cfg.lin_k_dim])?,
+    };
     let t = Array::from_int(len);
     let check = |code: i32, what: &str| -> R<()> {
         if code == 0 { Ok(()) } else { Err(Exception::custom(format!("Metal 커널 설정 실패: {what}"))) }
     };
     unsafe {
         let config = mlx_sys::mlx_fast_metal_kernel_config_new();
-        let result = (|| -> R<Array> {
+        let result = (|| -> R<(Array, Array)> {
             let y_shape = [1, len, cfg.lin_v_heads, cfg.lin_v_dim];
             let state_shape = [1, cfg.lin_v_heads, cfg.lin_v_dim, cfg.lin_k_dim];
             check(
@@ -467,10 +504,13 @@ fn gated_delta_rule(q: &Array, k: &Array, v: &Array, g: &Array, beta: &Array, cf
                 return Err(Exception::custom("Metal 델타 커널 실행에 실패했습니다"));
             }
             let mut y = mlx_sys::mlx_array_new();
-            let got = mlx_sys::mlx_vector_array_get(&mut y, output_vec, 0);
+            let got_y = mlx_sys::mlx_vector_array_get(&mut y, output_vec, 0);
+            let mut state_out = mlx_sys::mlx_array_new();
+            let got_state = mlx_sys::mlx_vector_array_get(&mut state_out, output_vec, 1);
             mlx_sys::mlx_vector_array_free(output_vec);
-            check(got, "출력 y 읽기")?;
-            Ok(Array::from_ptr(y))
+            check(got_y, "출력 y 읽기")?;
+            check(got_state, "출력 state 읽기")?;
+            Ok((Array::from_ptr(y), Array::from_ptr(state_out)))
         })();
         mlx_sys::mlx_fast_metal_kernel_config_free(config);
         result
@@ -505,6 +545,33 @@ unsafe impl Send for MlxBackbone {}
 pub struct MlxFiles {
     pub config: PathBuf,
     pub shards: Vec<PathBuf>,
+}
+
+/// 레이어 하나가 접두 구간 끝에서 남기는 상태.
+enum LayerCache {
+    /// gated-delta 레이어 — conv 입력 마지막 K-1개 `[1, K-1, C]`와 delta 상태 `[1, Hv, Dv, Dk]`(f32).
+    Linear { conv: Array, delta: Array },
+    /// 어텐션 레이어 — rope·norm 이후 K, V `[1, kv_heads, P, head_dim]`.
+    Full { keys: Array, values: Array },
+}
+
+/// 접두 토큰을 통과시킨 결과. 접두 뒤에 이어지는 토큰을 `hidden_states_with`로 계산할 때 쓴다.
+pub struct PrefixState {
+    tokens: Vec<u32>,
+    hidden: Vec<f32>,
+    layers: Vec<LayerCache>,
+}
+
+impl PrefixState {
+    /// 접두 토큰 수.
+    pub fn len(&self) -> usize {
+        self.tokens.len()
+    }
+
+    /// `token_ids`가 이 접두로 시작하는지.
+    pub fn is_prefix_of(&self, token_ids: &[u32]) -> bool {
+        token_ids.starts_with(&self.tokens)
+    }
 }
 
 impl MlxBackbone {
@@ -556,22 +623,88 @@ impl MlxBackbone {
 
     /// `token_ids` 전체에 대한 마지막 RMSNorm 이후 은닉 상태 `[L, hidden]`을 f32로 돌려준다.
     pub fn hidden_states(&self, token_ids: &[u32]) -> Result<Vec<f32>, String> {
-        let run = || -> R<Vec<f32>> {
-            let ids = Array::from_slice(token_ids, &[token_ids.len() as i32]);
-            let mut h = self.embed.dequantize_rows(&ids)?.reshape(&[1, token_ids.len() as i32, self.cfg.hidden])?;
-            for layer in &self.layers {
-                let normed = rms_norm(&h, &layer.input_norm, self.cfg.eps)?;
-                let mixed = match &layer.mixer {
-                    Mixer::Linear(m) => m.forward(&normed, &self.cfg)?,
-                    Mixer::Full(m) => m.forward(&normed, &self.cfg)?,
-                };
-                h = ops::add(&h, &mixed)?;
-                let mlp_out = layer.mlp.forward(&rms_norm(&h, &layer.post_norm, self.cfg.eps)?)?;
-                h = ops::add(&h, &mlp_out)?;
-            }
-            let out = rms_norm(&h, &self.norm, self.cfg.eps)?.as_dtype(Dtype::Float32)?;
+        self.hidden_states_with(None, token_ids)
+    }
+
+    /// 레이어를 한 번 통과시켜 마지막 RMSNorm 이후 은닉 상태 `[1, L, hidden]`(f32)과 레이어별
+    /// 상태를 돌려준다. `past`가 있으면 그 접두 뒤에 `token_ids`가 이어지는 것으로 계산한다.
+    fn run_layers(&self, token_ids: &[u32], past: Option<&PrefixState>) -> R<(Array, Vec<LayerCache>)> {
+        let len = token_ids.len() as i32;
+        let ids = Array::from_slice(token_ids, &[len]);
+        let mut h = self.embed.dequantize_rows(&ids)?.reshape(&[1, len, self.cfg.hidden])?;
+        let mut caches = Vec::with_capacity(self.layers.len());
+        for (index, layer) in self.layers.iter().enumerate() {
+            let normed = rms_norm(&h, &layer.input_norm, self.cfg.eps)?;
+            let past_layer = past.map(|prefix| &prefix.layers[index]);
+            let (mixed, cache) = match (&layer.mixer, past_layer) {
+                (Mixer::Linear(m), None) => {
+                    let (out, (conv, delta)) = m.forward(&normed, &self.cfg, None)?;
+                    (out, LayerCache::Linear { conv, delta })
+                }
+                (Mixer::Linear(m), Some(LayerCache::Linear { conv, delta })) => {
+                    let (out, (conv, delta)) = m.forward(&normed, &self.cfg, Some((conv, delta)))?;
+                    (out, LayerCache::Linear { conv, delta })
+                }
+                (Mixer::Full(m), None) => {
+                    let (out, (keys, values)) = m.forward(&normed, &self.cfg, None)?;
+                    (out, LayerCache::Full { keys, values })
+                }
+                (Mixer::Full(m), Some(LayerCache::Full { keys, values })) => {
+                    let (out, (keys, values)) = m.forward(&normed, &self.cfg, Some((keys, values)))?;
+                    (out, LayerCache::Full { keys, values })
+                }
+                _ => return Err(Exception::custom("접두 캐시가 레이어 종류와 맞지 않습니다")),
+            };
+            caches.push(cache);
+            h = ops::add(&h, &mixed)?;
+            let mlp_out = layer.mlp.forward(&rms_norm(&h, &layer.post_norm, self.cfg.eps)?)?;
+            h = ops::add(&h, &mlp_out)?;
+        }
+        let out = rms_norm(&h, &self.norm, self.cfg.eps)?.as_dtype(Dtype::Float32)?;
+        Ok((out, caches))
+    }
+
+    /// 접두 토큰만 한 번 통과시켜 이후 구간이 이어받을 레이어별 상태와 은닉 상태를 만든다.
+    pub fn prefill_prefix(&self, token_ids: &[u32]) -> Result<PrefixState, String> {
+        let run = || -> R<PrefixState> {
+            let (out, layers) = self.run_layers(token_ids, None)?;
             out.eval()?;
-            Ok(out.as_slice::<f32>().to_vec())
+            for cache in &layers {
+                match cache {
+                    LayerCache::Linear { conv, delta } => {
+                        conv.eval()?;
+                        delta.eval()?;
+                    }
+                    LayerCache::Full { keys, values } => {
+                        keys.eval()?;
+                        values.eval()?;
+                    }
+                }
+            }
+            Ok(PrefixState { tokens: token_ids.to_vec(), hidden: out.as_slice::<f32>().to_vec(), layers })
+        };
+        run().map_err(|err| format!("MLX 접두 계산에 실패했습니다: {}", err.what()))
+    }
+
+    /// `hidden_states`와 같되, `prefix`가 있으면 그 접두 뒤에 `token_ids`(접미만)가 이어지는 것으로
+    /// 계산하고 접두 은닉 상태를 앞에 붙여 `[prefix + L, hidden]`을 돌려준다.
+    pub fn hidden_states_with(&self, prefix: Option<&PrefixState>, token_ids: &[u32]) -> Result<Vec<f32>, String> {
+        let run = || -> R<Vec<f32>> {
+            let (out, _) = self.run_layers(token_ids, prefix)?;
+            out.eval()?;
+            super::timing::lap("backbone_eval");
+            let suffix = out.as_slice::<f32>();
+            let flat = match prefix {
+                Some(prefix) => {
+                    let mut flat = Vec::with_capacity(prefix.hidden.len() + suffix.len());
+                    flat.extend_from_slice(&prefix.hidden);
+                    flat.extend_from_slice(suffix);
+                    flat
+                }
+                None => suffix.to_vec(),
+            };
+            super::timing::lap("host_copy");
+            Ok(flat)
         };
         run().map_err(|err| format!("MLX 백본 추론에 실패했습니다: {}", err.what()))
     }
@@ -657,7 +790,7 @@ mod tests {
         // 채널 2개, 길이 3, 커널 2 — t번째 출력 = w[c,0]*x[t-1] + w[c,1]*x[t] (x[-1]=0).
         let qkv = Array::from_slice(&[1.0f32, 10.0, 2.0, 20.0, 3.0, 30.0], &[1, 3, 2]);
         let weight = Array::from_slice(&[1.0f32, 2.0, 3.0, 4.0], &[2, 2, 1]);
-        let out = depthwise_causal_conv(&qkv, &weight, 2, 2).unwrap();
+        let (out, _) = depthwise_causal_conv(&qkv, &weight, 2, 2, None).unwrap();
         out.eval().unwrap();
         // 채널0: w=[1,2], x=[1,2,3] → [0*1+1*2, 1*1+2*2, 2*1+3*2] = [2,5,8]
         // 채널1: w=[3,4], x=[10,20,30] → [0*3+10*4, 10*3+20*4, 20*3+30*4] = [40,110,180]
@@ -697,6 +830,106 @@ mod tests {
         assert!(close(y.as_slice::<f32>(), &[27.5, 33.0], 1e-3));
     }
 
+    fn wave(count: i32, freq: f32, shape: &[i32]) -> Array {
+        let steps = ops::arange::<_, f32>(None, count as f32, None).unwrap();
+        ops::sin(ops::multiply(steps, Array::from_f32(freq)).unwrap()).unwrap().reshape(shape).unwrap()
+    }
+
+    fn slice_len(a: &Array, axis_index: usize, from: i32, to: i32) -> Array {
+        // `[1, L, ...]`의 시간 축(1)을 자른다. axis_index는 배열 차원 수에 맞춰 쓴다.
+        match axis_index {
+            3 => a.index((.., from..to, ..)),
+            4 => a.index((.., from..to, .., ..)),
+            _ => panic!("지원하지 않는 차원 수"),
+        }
+    }
+
+    #[test]
+    fn causal_sdpa_with_shorter_queries_matches_the_tail_of_full_attention() {
+        // 접두 재사용의 전제 — 쿼리가 키보다 짧을 때 Causal 마스크가 오른쪽 아래로 정렬된다.
+        let (heads, len, dim) = (2, 6, 8);
+        let q = wave(heads * len * dim, 0.31, &[1, heads, len, dim]);
+        let k = wave(heads * len * dim, 0.17, &[1, heads, len, dim]);
+        let v = wave(heads * len * dim, 0.23, &[1, heads, len, dim]);
+        let scale = (dim as f32).powf(-0.5);
+        let attend = |q: &Array, k: &Array, v: &Array| {
+            fast::scaled_dot_product_attention(q, k, v, scale, fast::ScaledDotProductAttentionMask::Causal, None).unwrap()
+        };
+        let full = attend(&q, &k, &v);
+        let tail_q = q.index((.., .., 4..6, ..));
+        let tail = attend(&tail_q, &k, &v);
+        let expected = full.index((.., .., 4..6, ..)).contiguous().unwrap();
+        expected.eval().unwrap();
+        tail.eval().unwrap();
+        assert!(close(tail.as_slice::<f32>(), expected.as_slice::<f32>(), 1e-4));
+    }
+
+    #[test]
+    fn depthwise_conv_carries_state_across_a_split() {
+        let (len, channels, kernel) = (5, 2, 3);
+        let qkv = wave(len * channels, 0.7, &[1, len, channels]);
+        let weight = wave(channels * kernel, 0.4, &[channels, kernel, 1]);
+        let (full, _) = depthwise_causal_conv(&qkv, &weight, kernel, channels, None).unwrap();
+        let (head, head_state) =
+            depthwise_causal_conv(&slice_len(&qkv, 3, 0, 3), &weight, kernel, channels, None).unwrap();
+        let (tail, _) =
+            depthwise_causal_conv(&slice_len(&qkv, 3, 3, 5), &weight, kernel, channels, Some(&head_state)).unwrap();
+        let joined = concatenate(&[&head, &tail], 1).unwrap().contiguous().unwrap();
+        full.eval().unwrap();
+        joined.eval().unwrap();
+        assert!(close(joined.as_slice::<f32>(), full.contiguous().unwrap().as_slice::<f32>(), 1e-5));
+    }
+
+    #[test]
+    fn delta_kernel_carries_state_across_a_split() {
+        let cfg = Config {
+            hidden: 0, layers: 0, heads: 0, kv_heads: 0, head_dim: 0, rope_dims: 0, rope_theta: 0.0, eps: 0.0,
+            full_attention_interval: 4, lin_k_heads: 2, lin_v_heads: 4, lin_k_dim: 128, lin_v_dim: 8,
+            conv_kernel: 4, group_size: 64, bits: 8,
+        };
+        let len = 6;
+        let small = |a: Array| ops::multiply(a, Array::from_f32(0.05)).unwrap();
+        let q = small(wave(len * 2 * 128, 0.37, &[1, len, 2, 128]));
+        let k = small(wave(len * 2 * 128, 0.11, &[1, len, 2, 128]));
+        let v = wave(len * 4 * 8, 0.53, &[1, len, 4, 8]);
+        let g = ops::add(
+            ops::multiply(wave(len * 4, 0.9, &[1, len, 4]), Array::from_f32(0.1)).unwrap(),
+            Array::from_f32(0.8),
+        )
+        .unwrap();
+        let beta = ops::add(
+            ops::multiply(wave(len * 4, 0.7, &[1, len, 4]), Array::from_f32(0.2)).unwrap(),
+            Array::from_f32(0.5),
+        )
+        .unwrap();
+        let (full, full_state) = gated_delta_rule(&q, &k, &v, &g, &beta, &cfg, None).unwrap();
+        let part = |a: &Array, from: i32, to: i32| match a.shape().len() {
+            4 => slice_len(a, 4, from, to),
+            _ => slice_len(a, 3, from, to),
+        };
+        let (head, state) =
+            gated_delta_rule(&part(&q, 0, 4), &part(&k, 0, 4), &part(&v, 0, 4), &part(&g, 0, 4), &part(&beta, 0, 4), &cfg, None)
+                .unwrap();
+        let (tail, tail_state) = gated_delta_rule(
+            &part(&q, 4, 6),
+            &part(&k, 4, 6),
+            &part(&v, 4, 6),
+            &part(&g, 4, 6),
+            &part(&beta, 4, 6),
+            &cfg,
+            Some(&state),
+        )
+        .unwrap();
+        let joined = concatenate(&[&head, &tail], 1).unwrap().contiguous().unwrap();
+        let (full, joined) = (full.contiguous().unwrap(), joined);
+        full.eval().unwrap();
+        joined.eval().unwrap();
+        full_state.eval().unwrap();
+        tail_state.eval().unwrap();
+        assert!(close(joined.as_slice::<f32>(), full.as_slice::<f32>(), 1e-4));
+        assert!(close(tail_state.as_slice::<f32>(), full_state.as_slice::<f32>(), 1e-4));
+    }
+
     #[test]
     fn delta_kernel_matches_ops_reference() {
         // 커널이 ops 참조 구현과 같은 값을 내는지 — GQA(Hv=2*Hk), 여러 스텝, 상태 감쇠 포함.
@@ -726,7 +959,7 @@ mod tests {
         )
         .unwrap();
         let expected = gated_delta_rule_ops(&q, &k, &v, &g, &beta, &cfg).unwrap().contiguous().unwrap();
-        let got = gated_delta_rule(&q, &k, &v, &g, &beta, &cfg).unwrap().contiguous().unwrap();
+        let got = gated_delta_rule(&q, &k, &v, &g, &beta, &cfg, None).unwrap().0.contiguous().unwrap();
         expected.eval().unwrap();
         got.eval().unwrap();
         assert_eq!(got.shape(), expected.shape());
