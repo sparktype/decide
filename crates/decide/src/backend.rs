@@ -22,9 +22,14 @@ pub struct Env {
 
 impl Env {
     pub fn from_process() -> Self {
+        let (file, warnings) = crate::config::load_from_disk(std::env::var("HOME").ok().as_deref());
+        for warning in &warnings {
+            eprintln!("{warning}");
+        }
+        let env_var = |name: &str| std::env::var(name).ok().filter(|v| !v.trim().is_empty());
         Self {
-            backend: std::env::var("DECIDE_BACKEND").ok(),
-            api_key: std::env::var("TYPESAFE_API_KEY").ok(),
+            backend: env_var("DECIDE_BACKEND").or(file.backend),
+            api_key: env_var("TYPESAFE_API_KEY").or(file.typesafe_api_key),
         }
     }
 }
@@ -498,5 +503,49 @@ mod tests {
         let expected: Vec<String> = (0..100).map(|i| format!("q{i}")).collect();
         assert_eq!(ids, expected);
         assert_eq!(script.calls.get(), 1);
+    }
+
+    #[test]
+    fn from_process_falls_back_to_config_file_when_env_is_unset() {
+        let home = std::env::temp_dir().join(format!(
+            "decide-backend-env-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(home.join(".config/decide")).unwrap();
+        std::fs::write(
+            home.join(".config/decide/config.toml"),
+            "backend = \"local\"\n\n[typesafe]\napi_key = \"from-file\"\n",
+        )
+        .unwrap();
+
+        std::env::remove_var("DECIDE_BACKEND");
+        std::env::remove_var("TYPESAFE_API_KEY");
+        std::env::set_var("HOME", &home);
+        let env = Env::from_process();
+        assert_eq!(env.backend, Some("local".to_string()));
+        assert_eq!(env.api_key, Some("from-file".to_string()));
+
+        // 환경변수가 있으면 같은 키의 TOML 값을 완전히 가린다.
+        std::env::set_var("DECIDE_BACKEND", "typesafe");
+        std::env::set_var("TYPESAFE_API_KEY", "from-env");
+        let env = Env::from_process();
+        assert_eq!(env.backend, Some("typesafe".to_string()));
+        assert_eq!(env.api_key, Some("from-env".to_string()));
+
+        // 빈 문자열 환경변수는 미설정과 같다 — TOML 값이 다시 보여야 한다.
+        std::env::set_var("DECIDE_BACKEND", "");
+        std::env::set_var("TYPESAFE_API_KEY", "");
+        let env = Env::from_process();
+        assert_eq!(env.backend, Some("local".to_string()));
+        assert_eq!(env.api_key, Some("from-file".to_string()));
+
+        std::env::remove_var("DECIDE_BACKEND");
+        std::env::remove_var("TYPESAFE_API_KEY");
+        std::env::remove_var("HOME");
+        let _ = std::fs::remove_dir_all(&home);
     }
 }
