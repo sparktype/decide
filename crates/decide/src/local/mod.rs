@@ -29,6 +29,26 @@ fn pinned_weights_dir() -> Option<PathBuf> {
     value.map(PathBuf::from)
 }
 
+struct ResolvedHf {
+    endpoint: Option<String>,
+    home: Option<String>,
+    token: Option<String>,
+}
+
+/// HF_ENDPOINT/HF_HOME/HF_TOKEN 환경변수, 없으면 config.toml의 [local] 쪽 값. 필드별 독립.
+fn resolved_hf() -> ResolvedHf {
+    let env = |name: &str| std::env::var(name).ok().filter(|v| !v.trim().is_empty());
+    let (file, warnings) = crate::config::load_from_disk(std::env::var("HOME").ok().as_deref());
+    for warning in &warnings {
+        eprintln!("{warning}");
+    }
+    ResolvedHf {
+        endpoint: env("HF_ENDPOINT").or(file.local_hf_endpoint),
+        home: env("HF_HOME").or(file.local_hf_home),
+        token: env("HF_TOKEN").or(file.local_hf_token),
+    }
+}
+
 struct Runtime {
     backbone: Mutex<mlx_backbone::MlxBackbone>,
     joint_head: joint_head::JointHead,
@@ -166,10 +186,24 @@ fn resolve_pinned(dir: &std::path::Path) -> Result<Weights, String> {
     ))
 }
 
-/// HuggingFace 캐시(`~/.cache/huggingface/hub`)에서 받는다. 이미 있으면 다운로드 없이 그 경로를 쓴다.
-/// 첫 사용에는 약 10GB를 받는다.
+/// HuggingFace 캐시(`~/.cache/huggingface/hub`, `HF_HOME`/config.toml로 바꿀 수 있다)에서
+/// 받는다. 이미 있으면 다운로드 없이 그 경로를 쓴다. 첫 사용에는 약 10GB를 받는다.
 fn download_weights() -> Result<Weights, String> {
-    let api = hf_hub::api::sync::Api::new()
+    let resolved = resolved_hf();
+    // `ApiBuilder::from_env()`는 HF_HOME/HF_ENDPOINT 환경변수를 반영한다.
+    // `Api::new()`는 반영하지 않는다 — 지금까지 이 환경변수들이 전혀 적용되지 않던 버그.
+    let mut builder = hf_hub::api::sync::ApiBuilder::from_env();
+    if let Some(endpoint) = resolved.endpoint {
+        builder = builder.with_endpoint(endpoint);
+    }
+    if let Some(home) = resolved.home {
+        builder = builder.with_cache_dir(PathBuf::from(home).join("hub"));
+    }
+    if let Some(token) = resolved.token {
+        builder = builder.with_token(Some(token));
+    }
+    let api = builder
+        .build()
         .map_err(|err| format!("HuggingFace API 초기화에 실패했습니다: {err}"))?;
     let repo = api.model(MLX_REPO.to_string());
     let fetch = |name: &str| {
@@ -355,6 +389,69 @@ mod tests {
         assert_eq!(pinned_weights_dir(), Some(PathBuf::from("/from/env")));
 
         std::env::remove_var("CLEF_WEIGHTS");
+        std::env::remove_var("HOME");
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn resolved_hf_prefers_env_over_config_file_per_field() {
+        let home = std::env::temp_dir().join(format!(
+            "decide-local-hf-cfg-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(home.join(".config/decide")).unwrap();
+        std::fs::write(
+            home.join(".config/decide/config.toml"),
+            "[local]\nhf_endpoint = \"https://file.example\"\nhf_home = \"/file/cache\"\nhf_token = \"file-token\"\n",
+        )
+        .unwrap();
+
+        std::env::remove_var("HF_ENDPOINT");
+        std::env::remove_var("HF_HOME");
+        std::env::remove_var("HF_TOKEN");
+        std::env::set_var("HOME", &home);
+
+        // 파일만 있을 때: 셋 다 파일 값.
+        let resolved = resolved_hf();
+        assert_eq!(resolved.endpoint, Some("https://file.example".to_string()));
+        assert_eq!(resolved.home, Some("/file/cache".to_string()));
+        assert_eq!(resolved.token, Some("file-token".to_string()));
+
+        // endpoint만 환경변수로 덮으면 나머지 둘은 그대로 파일 값(필드별 독립).
+        std::env::set_var("HF_ENDPOINT", "https://env.example");
+        let resolved = resolved_hf();
+        assert_eq!(resolved.endpoint, Some("https://env.example".to_string()));
+        assert_eq!(resolved.home, Some("/file/cache".to_string()));
+        assert_eq!(resolved.token, Some("file-token".to_string()));
+
+        std::env::remove_var("HF_ENDPOINT");
+        std::env::remove_var("HOME");
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn resolved_hf_is_all_none_without_env_or_file() {
+        let home = std::env::temp_dir().join(format!(
+            "decide-local-hf-empty-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&home).unwrap();
+        std::env::remove_var("HF_ENDPOINT");
+        std::env::remove_var("HF_HOME");
+        std::env::remove_var("HF_TOKEN");
+        std::env::set_var("HOME", &home);
+        let resolved = resolved_hf();
+        assert_eq!(resolved.endpoint, None);
+        assert_eq!(resolved.home, None);
+        assert_eq!(resolved.token, None);
         std::env::remove_var("HOME");
         let _ = std::fs::remove_dir_all(&home);
     }
