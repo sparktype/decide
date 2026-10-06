@@ -7,6 +7,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const MAX_CACHE_ENTRIES: usize = 64;
@@ -162,40 +163,86 @@ fn error_json(message: &str) -> String {
         .unwrap_or_else(|_| r#"{"error":"직렬화에 실패했습니다"}"#.into())
 }
 
-pub fn serve(path: &Path, idle: Duration) -> std::io::Result<()> {
-    if !claim_socket(path)? {
-        eprintln!("daemon already running at {}", path.display());
+pub const DEFAULT_HTTP_ADDR: &str = "127.0.0.1:48080";
+
+/// UDS(게이트)와 HTTP(MCP)를 같은 프로세스에서 함께 서빙한다. 둘 다 같은
+/// Env/캐시를 공유하고, 둘 중 하나라도 최근에 활동했으면 idle 데드라인이
+/// 갱신된다 — 두 트랜스포트 모두 `idle` 동안 조용해야 프로세스가 끝난다.
+pub fn serve_unified(uds_path: &Path, http_addr: &str, idle: Duration) -> std::io::Result<()> {
+    if !claim_socket(uds_path)? {
+        eprintln!("daemon already running (uds)");
         return Ok(());
     }
+    if crate::http::http_port_in_use(http_addr) {
+        eprintln!("daemon already running (http)");
+        // UDS는 이미 claim했으므로 소켓 가드를 명시적으로 치운다.
+        let _ = std::fs::remove_file(uds_path);
+        return Ok(());
+    }
+    let cache = Arc::new(Mutex::new(Cache::default()));
+    let last_activity = Arc::new(Mutex::new(Instant::now()));
+
+    let uds_cache = cache.clone();
+    let uds_activity = last_activity.clone();
+    let uds_path_owned = uds_path.to_path_buf();
+    let uds_handle = std::thread::spawn(move || {
+        serve_uds_with_activity(&uds_path_owned, idle, uds_cache, uds_activity)
+    });
+
+    let http_cache = cache.clone();
+    let http_activity = last_activity.clone();
+    let http_addr_owned = http_addr.to_string();
+    let http_handle = std::thread::spawn(move || {
+        let env = Env::from_process();
+        let mut transport = live_transport(&env);
+        crate::http::serve_http(&http_addr_owned, &env, &mut transport, &http_activity, idle)
+    });
+
+    uds_handle.join().unwrap()?;
+    http_handle.join().unwrap()?;
+    let _ = http_cache; // 두 Arc 클론 중 마지막 참조가 여기서 자연히 drop된다.
+    Ok(())
+}
+
+fn serve_uds_with_activity(
+    path: &Path,
+    idle: Duration,
+    cache: Arc<Mutex<Cache>>,
+    last_activity: Arc<Mutex<Instant>>,
+) -> std::io::Result<()> {
     let listener = UnixListener::bind(path)?;
     let _guard = SocketGuard(path.to_path_buf());
     listener.set_nonblocking(true)?;
     let env = Env::from_process();
     let mut transport = live_transport(&env);
-    let mut cache = Cache::default();
     loop {
-        match accept_within(&listener, idle)? {
+        match accept_within(&listener, Duration::from_secs(1))? {
             Some(stream) => {
-                if !handle_connection(stream, &env, &mut transport, &mut cache) {
+                if !handle_connection_shared(stream, &env, &mut transport, &cache) {
+                    break;
+                }
+                *last_activity.lock().unwrap() = Instant::now();
+            }
+            None => {
+                if last_activity.lock().unwrap().elapsed() >= idle {
                     break;
                 }
             }
-            None => break,
         }
     }
     Ok(())
 }
 
 pub fn serve_default() -> std::io::Result<()> {
-    serve(&default_socket_path(), Duration::from_secs(30 * 60))
+    serve_unified(&default_socket_path(), DEFAULT_HTTP_ADDR, Duration::from_secs(30 * 60))
 }
 
 /// 연결 하나를 처리한다. 계속 서비스해야 하면 true, stale 응답을 했으면 false(데몬이 끝난다).
-fn handle_connection<T: Transport>(
+fn handle_connection_shared<T: Transport>(
     stream: UnixStream,
     env: &Env,
     transport: &mut T,
-    cache: &mut Cache,
+    cache: &Arc<Mutex<Cache>>,
 ) -> bool {
     // 리스너는 idle 종료를 위해 논블로킹이고, macOS(BSD)에서는 accept한 연결도 그 모드를 물려받는다.
     // 블로킹으로 되돌리지 않으면 아직 도착하지 않은 요청에 WouldBlock을 받고 연결을 닫아 버린다.
@@ -209,9 +256,11 @@ fn handle_connection<T: Transport>(
     if BufReader::new(stream).read_line(&mut line).is_err() {
         return true;
     }
-    let Some((payload, keep_serving)) = handle_request(&line, env, transport, cache) else {
+    let mut locked = cache.lock().unwrap();
+    let Some((payload, keep_serving)) = handle_request(&line, env, transport, &mut locked) else {
         return true;
     };
+    drop(locked);
     let _ = writer.write_all(payload.as_bytes());
     let _ = writer.write_all(b"\n");
     let _ = writer.flush();
@@ -445,7 +494,14 @@ mod tests {
         let path = dir.join("decide.sock");
         let server_path = path.clone();
         // 유휴 종료(10초)가 아니라 stale 때문에 끝나는지 보려고 일부러 길게 잡는다.
-        let server = std::thread::spawn(move || serve(&server_path, Duration::from_secs(10)));
+        let server = std::thread::spawn(move || {
+            serve_uds_with_activity(
+                &server_path,
+                Duration::from_secs(10),
+                Arc::new(Mutex::new(Cache::default())),
+                Arc::new(Mutex::new(Instant::now())),
+            )
+        });
         let started = Instant::now();
         while !path.exists() {
             assert!(started.elapsed() < Duration::from_secs(5), "소켓이 생기지 않았다");
@@ -475,7 +531,14 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("d.sock");
         let server_path = path.clone();
-        let server = std::thread::spawn(move || serve(&server_path, Duration::from_secs(10)));
+        let server = std::thread::spawn(move || {
+            serve_uds_with_activity(
+                &server_path,
+                Duration::from_secs(10),
+                Arc::new(Mutex::new(Cache::default())),
+                Arc::new(Mutex::new(Instant::now())),
+            )
+        });
         let started = Instant::now();
         while !path.exists() {
             assert!(started.elapsed() < Duration::from_secs(5), "소켓이 생기지 않았다");
@@ -508,8 +571,71 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("decide.sock");
-        serve(&path, Duration::from_millis(300)).unwrap();
+        serve_uds_with_activity(
+            &path,
+            Duration::from_millis(300),
+            Arc::new(Mutex::new(Cache::default())),
+            Arc::new(Mutex::new(Instant::now())),
+        )
+        .unwrap();
         assert!(!path.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn serve_default_binds_both_uds_and_http_and_both_work() {
+        // 기본 소켓/포트 경로를 쓰면 다른 테스트나 실제 데몬과 충돌하므로, 이 테스트는
+        // serve_default가 아니라 그 내부 로직을 그대로 쓰는 임시 경로/포트로 돈다.
+        let dir = std::env::temp_dir().join(format!(
+            "decide-unified-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let socket_path = dir.join("d.sock");
+
+        // 48080과 겹치지 않는 고정 포트 — 실제 운영 데몬(DEFAULT_HTTP_ADDR)과 동시에 떠 있어도 충돌하지 않는다.
+        let http_addr = "127.0.0.1:48099";
+        let socket_for_thread = socket_path.clone();
+        let server = std::thread::spawn(move || {
+            serve_unified(&socket_for_thread, http_addr, Duration::from_secs(5))
+        });
+
+        let started = Instant::now();
+        while !socket_path.exists() {
+            assert!(started.elapsed() < Duration::from_secs(5), "UDS 소켓이 생기지 않았다");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // UDS 쪽: 기존 line protocol로 확인.
+        let mut stream = UnixStream::connect(&socket_path).unwrap();
+        writeln!(stream, "{}", with_client_version("0.0.1")).unwrap();
+        let mut reply = String::new();
+        BufReader::new(stream).read_line(&mut reply).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&reply).unwrap(),
+            json!({"stale": true, "version": VERSION})
+        );
+
+        // HTTP 쪽: 포트가 열릴 때까지 재시도.
+        let mut http_ok = false;
+        for _ in 0..50 {
+            if let Ok(response) = ureq::post(&format!("http://{http_addr}/mcp")).send_json(json!({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/list"
+            })) {
+                let parsed: Value = response.into_json().unwrap();
+                assert_eq!(parsed["result"]["tools"][0]["name"], "decide");
+                http_ok = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(http_ok, "HTTP 트랜스포트가 응답하지 않았다");
+
+        server.join().unwrap().unwrap();
         let _ = std::fs::remove_dir_all(&dir);
     }
 
