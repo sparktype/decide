@@ -155,7 +155,12 @@ pub fn decide_many<T: Transport>(
 }
 
 pub fn live_transport(env: &Env) -> LiveTransport {
-    LiveTransport::typesafe(nonempty(env.api_key.as_deref()).unwrap_or(""))
+    let key = nonempty(env.api_key.as_deref()).unwrap_or("");
+    let url = std::env::var("DECIDE_TYPESAFE_URL").ok();
+    match nonempty(url.as_deref()) {
+        Some(url) => LiveTransport::with_url(url, key),
+        None => LiveTransport::typesafe(key),
+    }
 }
 
 pub fn nonempty(value: Option<&str>) -> Option<&str> {

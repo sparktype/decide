@@ -166,6 +166,11 @@ impl LiveTransport {
         Self::build(ENDPOINT, Some(key.to_string()))
     }
 
+    /// TypeSafe 대신 같은 System One 형식을 말하는 서버(예: 로컬 Kev)로 보낸다.
+    pub fn with_url(url: &str, key: &str) -> Self {
+        Self::build(url, Some(key.to_string()))
+    }
+
     fn build(url: &str, key: Option<String>) -> Self {
         Self {
             agent: ureq::AgentBuilder::new()

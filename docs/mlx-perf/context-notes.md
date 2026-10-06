@@ -38,3 +38,11 @@
 - 사실: 확률이 눈에 띄게 퍼진다. 같은 choice 질문(865토큰 state)에서 infra 확률이 8bit 0.844, 4bit 0.599이고 billing은 0.154 대 0.399다. 1위는 같지만 `confidence` 임계값을 쓰는 호출에는 영향이 있다.
 - 사실: 접두 재사용은 4bit에서도 2.58배(9698ms 대 3754ms)이고 접두 사용/미사용 답 차이는 0.01 이내다.
 - 결론: 기본은 8bit를 유지한다. 4bit는 메모리가 제약일 때 `DECIDE_LOCAL_REPO`로 선택하는 옵션이며, 4bit 기준으로 `confidence`/`noul` 임계값을 따로 보정해야 한다(두 백엔드가 서로 보정돼 있지 않다는 기존 원칙과 같다).
+
+## 2026-10-06 (오프라인 사무실·응답 성능 우선 후보 조사)
+- 조건: 사무실은 외부 인터넷이 없고 맥은 M2 Pro 32GB다. 응답 성능(지연) 우선, Clef 이외 모델을 원했다. M2 Pro는 이 개발 Mac(M1 Max)보다 GPU 연산이 약 0.65배라 같은 모델의 지연은 약 1.5배로 본다.
+- 사실: Decision Index 0.2.1에서 Clef 61.21(자체), Jev 57.91(독립), Clef-flash 57.1, Von 13.74. Von은 가장 빠르지만(A10G 23ms) 정확도가 판단 도구 수준이 못 된다.
+- 후보: Kev-4B(Qwen3.5-4B + LoRA, Apache-2.0, MLX 네이티브, 255옵션, 8k 컨텍스트, breadth-v1 0.690 대 Jev 0.757). M5에서 5질문 721ms, 같은 텍스트 반복 시 136ms(서버가 state를 캐시). 메모리는 약 9GB(어댑터 병합 시 적재 순간 약 16GB).
+- 제외: NeoHorse-Jev-4B(state 384토큰 제한, MLX 없음), Nimble-9B-v3(CC BY-NC), JEV-27B(54GB), Kev-27B(51GB, 32GB Mac에 불가).
+- 결정: Kev는 TypeSafe `/v1/systemone`과 같은 형식이라 `decide` 코드는 `DECIDE_TYPESAFE_URL` 한 줄로 연결한다(`live_transport`). 키는 비어 있지 않은 임의 값(예: `local`)을 `TYPESAFE_API_KEY`로 준다.
+- 미완: Kev 서버 실행(`uv run --extra serve python -m kev.serve --run jaredpalmer/kev-4b --port 8009`)은 자동 모드 분류기가 외부 코드 실행으로 거부했다. 사용자 승인 뒤에 이어서 측정한다. 의존성(`uv sync --extra serve`)은 scratchpad의 클론에 설치돼 있다.
