@@ -169,8 +169,22 @@ pub fn raw_logits(state: &str, question: &Question) -> Result<Vec<(String, f32)>
     score(runtime, state, question)
 }
 
-/// MLX 8비트 체크포인트 저장소. 비전 텐서는 샤드에 섞여 있지만 읽을 때 건너뛴다.
+/// 기본 MLX 체크포인트 저장소(8bit). 비전 텐서는 샤드에 섞여 있지만 읽을 때 건너뛴다.
+/// `DECIDE_LOCAL_REPO` 환경변수나 config.toml의 `[local].repo`로 바꿀 수 있다(`resolved_repo`).
 const MLX_REPO: &str = "mlx-community/clef-flash-8bit";
+
+/// `DECIDE_LOCAL_REPO` 환경변수, 없으면 config.toml의 `[local].repo`, 둘 다 없으면 `MLX_REPO`.
+fn resolved_repo() -> String {
+    let env = std::env::var("DECIDE_LOCAL_REPO").ok().filter(|v| !v.trim().is_empty());
+    if let Some(repo) = env {
+        return repo;
+    }
+    let (file, warnings) = crate::config::load_from_disk(std::env::var("HOME").ok().as_deref());
+    for warning in &warnings {
+        eprintln!("{warning}");
+    }
+    file.local_repo.unwrap_or_else(|| MLX_REPO.to_string())
+}
 
 const FIXED_FILES: [&str; 3] = ["config.json", "model.safetensors.index.json", "joint_head.safetensors"];
 
@@ -223,10 +237,11 @@ fn hf_api() -> Result<hf_hub::api::sync::Api, String> {
 
 fn download_weights() -> Result<Weights, String> {
     let api = hf_api()?;
-    let repo = api.model(MLX_REPO.to_string());
+    let repo_name = resolved_repo();
+    let repo = api.model(repo_name.clone());
     let fetch = |name: &str| {
         repo.get(name)
-            .map_err(|err| format!("{MLX_REPO}/{name} 다운로드에 실패했습니다: {err}"))
+            .map_err(|err| format!("{repo_name}/{name} 다운로드에 실패했습니다: {err}"))
     };
     let config = fetch("config.json")?;
     let index = fetch("model.safetensors.index.json")?;
@@ -503,6 +518,41 @@ mod tests {
         assert_eq!(resolved.endpoint, None);
         assert_eq!(resolved.home, None);
         assert_eq!(resolved.token, None);
+        std::env::remove_var("HOME");
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn resolved_repo_falls_back_to_config_file_then_default() {
+        let home = std::env::temp_dir().join(format!(
+            "decide-local-repo-cfg-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&home).unwrap();
+        std::env::remove_var("DECIDE_LOCAL_REPO");
+        std::env::set_var("HOME", &home);
+
+        // 환경변수도, config.toml도 없으면 기본값(8bit).
+        assert_eq!(resolved_repo(), MLX_REPO);
+
+        // config.toml만 있으면 그 값.
+        std::fs::create_dir_all(home.join(".config/decide")).unwrap();
+        std::fs::write(
+            home.join(".config/decide/config.toml"),
+            "[local]\nrepo = \"mlx-community/clef-flash-4bit\"\n",
+        )
+        .unwrap();
+        assert_eq!(resolved_repo(), "mlx-community/clef-flash-4bit");
+
+        // 환경변수가 있으면 config.toml을 가린다.
+        std::env::set_var("DECIDE_LOCAL_REPO", "mlx-community/clef-flash-env");
+        assert_eq!(resolved_repo(), "mlx-community/clef-flash-env");
+
+        std::env::remove_var("DECIDE_LOCAL_REPO");
         std::env::remove_var("HOME");
         let _ = std::fs::remove_dir_all(&home);
     }

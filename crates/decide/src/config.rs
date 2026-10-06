@@ -9,6 +9,7 @@ pub struct FileConfig {
     pub backend: Option<String>,
     pub typesafe_api_key: Option<String>,
     pub local_weights: Option<String>,
+    pub local_repo: Option<String>,
     pub local_hf_endpoint: Option<String>,
     pub local_hf_home: Option<String>,
     pub local_hf_token: Option<String>,
@@ -31,6 +32,7 @@ struct RawTypesafe {
 #[derive(Debug, Default, Deserialize)]
 struct RawLocal {
     weights: Option<String>,
+    repo: Option<String>,
     hf_endpoint: Option<String>,
     hf_home: Option<String>,
     hf_token: Option<String>,
@@ -47,6 +49,7 @@ fn parse(text: &str) -> Result<FileConfig, String> {
         backend: nonblank(raw.backend),
         typesafe_api_key: nonblank(raw.typesafe.api_key),
         local_weights: nonblank(raw.local.weights),
+        local_repo: nonblank(raw.local.repo),
         local_hf_endpoint: nonblank(raw.local.hf_endpoint),
         local_hf_home: nonblank(raw.local.hf_home),
         local_hf_token: nonblank(raw.local.hf_token),
@@ -149,6 +152,7 @@ api_key = "sk-test"
 
 [local]
 weights = "/path/to/weights"
+repo = "mlx-community/clef-flash-4bit"
 hf_endpoint = "https://nexus.example/hf"
 hf_home = "/path/to/cache"
 hf_token = "hf-test"
@@ -160,6 +164,10 @@ hf_token = "hf-test"
         assert_eq!(file.backend, Some("local".to_string()));
         assert_eq!(file.typesafe_api_key, Some("sk-test".to_string()));
         assert_eq!(file.local_weights, Some("/path/to/weights".to_string()));
+        assert_eq!(
+            file.local_repo,
+            Some("mlx-community/clef-flash-4bit".to_string())
+        );
         assert_eq!(
             file.local_hf_endpoint,
             Some("https://nexus.example/hf".to_string())
