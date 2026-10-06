@@ -72,7 +72,10 @@ pub fn load_from_disk(home: Option<&str>) -> (FileConfig, Vec<String>) {
         Err(err) => {
             return (
                 FileConfig::default(),
-                vec![format!("설정을 읽지 못해 건너뜁니다 ({}): {err}", path.display())],
+                vec![format!(
+                    "설정을 읽지 못해 건너뜁니다 ({}): {err}",
+                    path.display()
+                )],
             );
         }
     };
@@ -157,7 +160,10 @@ hf_token = "hf-test"
         assert_eq!(file.backend, Some("local".to_string()));
         assert_eq!(file.typesafe_api_key, Some("sk-test".to_string()));
         assert_eq!(file.local_weights, Some("/path/to/weights".to_string()));
-        assert_eq!(file.local_hf_endpoint, Some("https://nexus.example/hf".to_string()));
+        assert_eq!(
+            file.local_hf_endpoint,
+            Some("https://nexus.example/hf".to_string())
+        );
         assert_eq!(file.local_hf_home, Some("/path/to/cache".to_string()));
         assert_eq!(file.local_hf_token, Some("hf-test".to_string()));
         let _ = std::fs::remove_dir_all(&home);

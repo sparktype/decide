@@ -19,7 +19,8 @@ fn pinned_weights_dir() -> Option<PathBuf> {
     let value = match env {
         Some(value) => Some(value),
         None => {
-            let (file, warnings) = crate::config::load_from_disk(std::env::var("HOME").ok().as_deref());
+            let (file, warnings) =
+                crate::config::load_from_disk(std::env::var("HOME").ok().as_deref());
             for warning in &warnings {
                 eprintln!("{warning}");
             }
