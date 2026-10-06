@@ -128,6 +128,13 @@ or `.claude/settings.json`, restart Claude Code.
   `local/tokenizer.rs` assembles the Clef schema text and token spans.
   `backend::decide`/`decide_many` call `local::infer` directly — no transport,
   no `Backend::Local` arm in `typesafe::LiveTransport`.
+  `DECIDE_LOCAL_TIMING=1` makes each `infer` print one stderr line with per-stage times
+  (`local/timing.rs`: load, tokenize, backbone_eval, host_copy, head_tensors, head); it is off by
+  default and never changes the answer. `decide daemon` (`serve_default`, not `serve_unified`, so
+  tests never load the model) preloads the model on a background thread when the backend resolves to
+  local, via `local::warmup`. Measured on M1 Max, release: warm backbone is 92-94% of the call
+  (464ms at 145 tokens, 2277ms at 861), head 33-117ms, host copy under 2ms. candle uses the
+  `accelerate` feature, which halves the head on long inputs (117ms to 58ms).
 - `mcp.rs` speaks newline-delimited JSON-RPC. Tool failures are `isError` results. It
   is transport-agnostic (`handle_message(&Value, &Env, &mut T) -> Option<Value>`) and
   is reused as-is by both the stdio loop (`main.rs::run_mcp`) and `http.rs`'s HTTP handler.

@@ -233,7 +233,21 @@ fn serve_uds_with_activity(
     Ok(())
 }
 
+/// 로컬 백엔드로 해석되면 백그라운드에서 모델을 미리 올린다. 서빙은 막지 않는다 —
+/// 선로딩 중 들어온 요청은 백본 락에서 기다린다.
+fn preload_local_backend() {
+    let env = Env::from_process();
+    if select_backend(env.backend.as_deref(), env.api_key.as_deref()) == Ok(Backend::Local) {
+        std::thread::spawn(|| {
+            if let Err(err) = crate::local::warmup() {
+                eprintln!("로컬 모델 선로딩에 실패했습니다: {err}");
+            }
+        });
+    }
+}
+
 pub fn serve_default() -> std::io::Result<()> {
+    preload_local_backend();
     serve_unified(&default_socket_path(), DEFAULT_HTTP_ADDR, Duration::from_secs(30 * 60))
 }
 

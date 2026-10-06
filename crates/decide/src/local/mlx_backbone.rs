@@ -571,7 +571,10 @@ impl MlxBackbone {
             }
             let out = rms_norm(&h, &self.norm, self.cfg.eps)?.as_dtype(Dtype::Float32)?;
             out.eval()?;
-            Ok(out.as_slice::<f32>().to_vec())
+            super::timing::lap("backbone_eval");
+            let flat = out.as_slice::<f32>().to_vec();
+            super::timing::lap("host_copy");
+            Ok(flat)
         };
         run().map_err(|err| format!("MLX 백본 추론에 실패했습니다: {}", err.what()))
     }

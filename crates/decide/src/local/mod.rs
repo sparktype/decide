@@ -1,6 +1,7 @@
 mod joint_head;
 mod mlx_backbone;
 mod postprocess;
+mod timing;
 // parity 테스트(`crates/decide/tests/parity.rs`)가 `decide::local::tokenizer::spans`로
 // 실제 토큰 스팬을 검증해야 하므로 `pub`으로 재노출한다.
 pub mod tokenizer;
@@ -105,6 +106,7 @@ fn head_inputs(
     let input_ids = Tensor::new(remapped.as_slice(), &device)
         .and_then(|t| t.unsqueeze(0))
         .map_err(|err| err.to_string())?;
+    timing::lap("head_tensors");
     Ok((hidden_states, input_ids, table))
 }
 
@@ -117,12 +119,13 @@ fn head_inputs(
 fn score(runtime: &Runtime, state: &str, question: &Question) -> Result<Vec<(String, f32)>, String> {
     let (token_ids, offsets) = runtime.tokenizer.encode(state, question)?;
     let (question_span, option_spans) = tokenizer::spans(state, question);
+    timing::lap("tokenize");
     let (hidden_states, input_ids, output_embeddings) = {
         let backbone = runtime.backbone.lock().map_err(|_| "백본 락 획득에 실패했습니다".to_string())?;
         head_inputs(&backbone, &token_ids, &offsets, &option_spans)?
     };
     let question_type = tokenizer::question_type_id(question);
-    runtime.joint_head.score(
+    let scored = runtime.joint_head.score(
         &hidden_states,
         &input_ids,
         question_type,
@@ -130,7 +133,10 @@ fn score(runtime: &Runtime, state: &str, question: &Question) -> Result<Vec<(Str
         &option_spans,
         &offsets,
         &output_embeddings,
-    )
+    );
+    timing::lap("head");
+    timing::finish(token_ids.len());
+    scored
 }
 
 /// 추론 한 번이 끝나면(성공·실패 어느 쪽이든) MLX의 allocator 캐시를 비운다. 비우지 않으면
@@ -144,12 +150,20 @@ impl Drop for ClearCacheGuard {
     }
 }
 
+/// 데몬이 시작할 때 모델을 미리 올리고 더미 추론을 한 번 돌린다. 가중치 로딩·페이지인·Metal 커널
+/// 컴파일 비용을 첫 실제 요청이 떠안지 않게 한다.
+pub fn warmup() -> Result<(), String> {
+    infer("warmup", &Question::Noul { instructions: "참인가?".into() }).map(|_| ())
+}
+
 pub fn infer(state: &str, question: &Question) -> Result<Value, String> {
     let _guard = ClearCacheGuard;
+    timing::start();
     let runtime = match runtime() {
         Ok(runtime) => runtime,
         Err(err) => return Err(err.clone()),
     };
+    timing::lap("load");
     let labeled_logits = score(runtime, state, question)?;
     Ok(postprocess::to_answer(question, &labeled_logits))
 }
@@ -350,6 +364,30 @@ mod tests {
         let answer = infer("서버가 다운됐습니다", &question).unwrap();
         assert_eq!(answer["type"], "noul");
         assert!(answer["noul"].as_f64().is_some());
+    }
+
+    #[test]
+    #[ignore] // 실제 가중치로 단계별 지연을 본다 — `DECIDE_LOCAL_TIMING=1 cargo test -- --ignored --nocapture timing_breakdown`
+    fn timing_breakdown_with_real_weights() {
+        let question = crate::protocol::Question::Noul { instructions: "참인가?".into() };
+        let long_state = "서버 로그에서 결제 서비스의 응답 지연이 관측되었고 재시도가 늘었습니다. ".repeat(40);
+        for (name, state) in [("cold-short", "서버가 다운됐습니다"), ("warm-short", "서버가 다운됐습니다"), ("warm-long", long_state.as_str())] {
+            let start = std::time::Instant::now();
+            infer(state, &question).unwrap();
+            eprintln!("{name}: wall={:.1}ms", start.elapsed().as_secs_f64() * 1000.0);
+        }
+    }
+
+    #[test]
+    #[ignore] // 실제 가중치 필요 — 선로딩 뒤 첫 요청이 웜 상태(두 번째 요청과 비슷한 지연)인지 본다
+    fn warmup_moves_cold_cost_out_of_first_request() {
+        let start = std::time::Instant::now();
+        warmup().unwrap();
+        eprintln!("warmup: wall={:.1}ms", start.elapsed().as_secs_f64() * 1000.0);
+        let question = crate::protocol::Question::Noul { instructions: "참인가?".into() };
+        let start = std::time::Instant::now();
+        infer("서버가 다운됐습니다", &question).unwrap();
+        eprintln!("first-after-warmup: wall={:.1}ms", start.elapsed().as_secs_f64() * 1000.0);
     }
 
     fn weights_fixture(name: &str) -> PathBuf {
