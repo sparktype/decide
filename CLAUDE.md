@@ -60,10 +60,12 @@ kernels) side by side, and the formula must install both into the same directory
 to the executable first and otherwise falls back to a path baked in at build time
 (`/Users/runner/.mlx/lib/...`), which does not exist on a user's machine. v0.2.0 shipped without it
 and every inference failed. The API key stays in the environment as `TYPESAFE_API_KEY`.
-`.mcp.json` points `decide` at `/opt/homebrew/bin/decide` with `args: ["mcp"]` and no
-`env` entry. Running `decide install` registers the tool in Claude Code's user scope
-by shelling out to `claude mcp add -s user decide -- /opt/homebrew/bin/decide mcp`,
-as an alternative to editing `.mcp.json` by hand.
+`.mcp.json` points `decide` at `type: "http"`, `url: "http://127.0.0.1:48080/mcp"` — a
+decide daemon must already be listening there. Running `decide install` registers the
+tool in Claude Code's user scope the same way, by shelling out to `claude mcp add -s
+user --transport http decide http://127.0.0.1:48080/mcp`, and spawns `decide daemon`
+if that port isn't already bound; this is an alternative to editing `.mcp.json` by
+hand. The daemon does not survive a reboot — run `decide daemon &` manually after one.
 
 Runtime tests, no weights and no network:
 
@@ -83,7 +85,9 @@ Daemon socket `~/.cache/decide/decide.sock`, 30 minutes idle:
 /opt/homebrew/bin/decide daemon
 ```
 
-`decide mcp` is the stdio MCP server. The command line follows the usual conventions (`src/help.rs`
+`decide mcp` is the stdio MCP server (kept for compatibility; `decide install` no
+longer registers this path — see `decide daemon`'s HTTP transport below). The command
+line follows the usual conventions (`src/help.rs`
 owns every help text and keeps the command list in one place): `-h`/`--help` or no arguments print the
 overview, `<command> --help` and `help <command>` print that command's help, `-V`/`--version` print
 `decide <version>`; all of them exit 0 on stdout, and `main.rs` handles them before dispatch so `mcp --help`
@@ -124,18 +128,37 @@ or `.claude/settings.json`, restart Claude Code.
   `local/tokenizer.rs` assembles the Clef schema text and token spans.
   `backend::decide`/`decide_many` call `local::infer` directly — no transport,
   no `Backend::Local` arm in `typesafe::LiveTransport`.
-- `mcp.rs` speaks newline-delimited JSON-RPC. Tool failures are `isError` results.
-- `daemon.rs` serves one JSON line per connection. A live socket is left in place. A
-  dead socket file is replaced. Idle exit uses `poll`. It also holds an in-process
-  LRU (`MAX_CACHE_ENTRIES` = 64, keyed on the parsed request plus the resolved
-  backend) so identical requests within one daemon lifetime skip the transport;
-  cached answers carry `routing.cached: true` and `latency_ms: 0.0`. `decide mcp`
-  is a fresh process per call and has no cache. A request may carry `client_version`;
-  when it differs from `daemon::VERSION` the daemon skips the backend, answers
-  `{"stale":true,"version":…}`, and exits, so an upgraded client never keeps talking to an old
-  daemon (`handle_request` returns `(reply, keep_serving)`). Requests without the field behave as before.
+- `mcp.rs` speaks newline-delimited JSON-RPC. Tool failures are `isError` results. It
+  is transport-agnostic (`handle_message(&Value, &Env, &mut T) -> Option<Value>`) and
+  is reused as-is by both the stdio loop (`main.rs::run_mcp`) and `http.rs`'s HTTP handler.
+- `http.rs` is the MCP HTTP transport: `handle_http_body` parses one JSON-RPC message
+  from a request body and feeds it to `mcp::handle_message`, returning `(status, body)`;
+  JSON parse errors and JSON-RPC-level errors go in the response body (code `-32700`
+  etc.), never the HTTP status. `serve_http`/`http_port_in_use` wrap this in a
+  `tiny_http` server bound to a fixed local address, handling only `POST /mcp` (anything
+  else is a 404) — no SSE, one request in and one JSON-RPC result out.
+- `daemon.rs` serves one JSON line per UDS connection, same as before, and now also runs
+  an HTTP server on the same process via `serve_unified` (`DEFAULT_HTTP_ADDR =
+  "127.0.0.1:48080"`): both transports run on their own thread, share one
+  `Arc<Mutex<Cache>>` (though in practice only the UDS/gate path uses the cache — MCP
+  requests never did) and one `Arc<Mutex<Instant>>` idle timer, so either transport's
+  traffic resets the shared 30-minute idle deadline and the daemon only exits once both
+  go quiet. `serve_unified` claims the UDS socket first (`claim_socket`) and only then
+  checks the HTTP port (`http_port_in_use`); if either is already taken, the process
+  exits without starting (and un-claims the UDS socket on an HTTP-port conflict). A live
+  socket is left in place; a dead socket file is replaced. Idle exit uses `poll` (UDS
+  side) or `recv_timeout` (HTTP side). The LRU (`MAX_CACHE_ENTRIES` = 64, keyed on the
+  parsed request plus the resolved backend) makes identical gate requests within one
+  daemon lifetime skip the transport; cached answers carry `routing.cached: true` and
+  `latency_ms: 0.0`. `decide mcp` (stdio) is a fresh process per call and has no cache.
+  A request may carry `client_version`; when it differs from `daemon::VERSION` the
+  daemon skips the backend, answers `{"stale":true,"version":…}`, and exits (UDS path
+  only), so an upgraded client never keeps talking to an old daemon (`handle_request`
+  returns `(reply, keep_serving)`). Requests without the field behave as before.
 - `main.rs` routes `mcp`, `daemon`, `install`, `hook`, and `gate` subcommands (`gate` also has `--show` and `stats`). No arguments prints
-  help (see `help.rs`). `install` shells out to `claude mcp add -s user decide -- <bin> mcp`.
+  help (see `help.rs`). `install` shells out to `claude mcp add -s user --transport http
+  decide http://127.0.0.1:48080/mcp` (`install_mcp_args`) and, if that port isn't bound
+  yet, spawns `decide daemon` via the same mechanism the gate uses (`spawn_daemon_if_needed`).
 - `claude.rs` merges hooks into Claude Code's user settings for `decide install --claude`:
   `add_hook_spec` (pure) appends one group for a `HookSpec` (event, matcher, command, timeout), idempotent on
   the exact command within that event, refusing shapes it cannot merge into; `install_hooks` installs the display
