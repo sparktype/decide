@@ -154,11 +154,16 @@ pub fn decide_many<T: Transport>(
     })
 }
 
+/// `DECIDE_TYPESAFE_URL` 환경변수, 없으면 config.toml의 `[typesafe].url`. 둘 다 없으면 None(TypeSafe 기본 주소).
+fn resolved_typesafe_url() -> Option<String> {
+    let env = std::env::var("DECIDE_TYPESAFE_URL").ok().filter(|v| !v.trim().is_empty());
+    env.or_else(|| crate::config::load_from_disk(std::env::var("HOME").ok().as_deref()).0.typesafe_url)
+}
+
 pub fn live_transport(env: &Env) -> LiveTransport {
     let key = nonempty(env.api_key.as_deref()).unwrap_or("");
-    let url = std::env::var("DECIDE_TYPESAFE_URL").ok();
-    match nonempty(url.as_deref()) {
-        Some(url) => LiveTransport::with_url(url, key),
+    match resolved_typesafe_url() {
+        Some(url) => LiveTransport::with_url(url.trim(), key),
         None => LiveTransport::typesafe(key),
     }
 }

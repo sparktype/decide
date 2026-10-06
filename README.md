@@ -283,12 +283,25 @@ backend = "local"        # DECIDE_BACKEND와 같은 뜻
 
 [typesafe]
 api_key = "sk-..."       # TYPESAFE_API_KEY와 같은 뜻
+url = "http://127.0.0.1:8009/v1/systemone"   # DECIDE_TYPESAFE_URL과 같은 뜻(기본은 TypeSafe 주소)
 
 [local]
 weights = "/path/to/weights"   # CLEF_WEIGHTS와 같은 뜻
 hf_endpoint = "https://nexus.example/hf-proxy"  # HF_ENDPOINT와 같은 뜻
 hf_home = "/path/to/cache"      # HF_HOME과 같은 뜻
 hf_token = "hf_..."             # HF_TOKEN과 같은 뜻(hf-hub 자체는 이 환경변수를 지원하지 않는다)
+```
+
+`[typesafe].url`(또는 `DECIDE_TYPESAFE_URL`)은 TypeSafe 대신 같은 System One 형식을 말하는 서버로
+보낸다. 로컬 Kev 서버(`kev.serve`, 인터넷 없는 환경 포함)를 기본 모델로 쓰는 설정은 다음과 같다. 키는
+비어 있지 않은 아무 값이면 된다. Kev 서버는 `decide`가 띄우지 않으므로 먼저 실행돼 있어야 한다.
+
+```toml
+backend = "typesafe"
+
+[typesafe]
+api_key = "local"
+url = "http://127.0.0.1:8009/v1/systemone"
 ```
 
 ## 개발

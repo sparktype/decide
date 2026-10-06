@@ -107,8 +107,9 @@ or `.claude/settings.json`, restart Claude Code.
   in a single backend call. `protocol::parse_many`/`validate_many` keep input order and
   prefix errors with `질문 "<id>": `; `typesafe::request_body_many`/`map_answers` build the
   body and pick the requested ids. All-or-nothing; no question-count cap. `decide` is unchanged.
-- `typesafe.rs` posts to `https://api.typesafe.ai/v1/systemone` (or to `DECIDE_TYPESAFE_URL` when set, e.g.
-  a local server that speaks the same System One format; `live_transport` in `backend.rs`) with model
+- `typesafe.rs` posts to `https://api.typesafe.ai/v1/systemone` (or to `DECIDE_TYPESAFE_URL` / config.toml
+  `[typesafe].url` when set, e.g. a local Kev server that speaks the same System One format; see
+  `resolved_typesafe_url` in `backend.rs`; the key must still be non-empty) with model
   `jev-latest`. Choice criteria are `{option: option}` in insertion order. Retry 429
   and 529 once after one second. Choice above 255 options and score above 10 levels
   fail before the request.
