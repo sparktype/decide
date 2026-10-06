@@ -133,7 +133,19 @@ fn score(runtime: &Runtime, state: &str, question: &Question) -> Result<Vec<(Str
     )
 }
 
+/// 추론 한 번이 끝나면(성공·실패 어느 쪽이든) MLX의 allocator 캐시를 비운다. 비우지 않으면
+/// forward pass의 중간 텐서(은닉 상태, dequantize된 어휘 행 등)가 프로세스에 계속 쌓여, 양자화
+/// 비트 수를 줄여도 GPU 메모리가 줄지 않는다(활성 상태 보기의 "GPU 프로세스" 메모리로 관찰됨).
+struct ClearCacheGuard;
+
+impl Drop for ClearCacheGuard {
+    fn drop(&mut self) {
+        let _ = mlx_rs::memory::clear_cache();
+    }
+}
+
 pub fn infer(state: &str, question: &Question) -> Result<Value, String> {
+    let _guard = ClearCacheGuard;
     let runtime = match runtime() {
         Ok(runtime) => runtime,
         Err(err) => return Err(err.clone()),
@@ -292,6 +304,27 @@ impl LocalTokenizer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clear_cache_guard_calls_clear_cache_on_drop_even_on_early_return() {
+        fn returns_early(fail: bool) -> Result<(), String> {
+            let _guard = ClearCacheGuard;
+            if fail {
+                return Err("실패".to_string());
+            }
+            Ok(())
+        }
+
+        mlx_rs::memory::clear_cache().unwrap();
+        let before = mlx_rs::memory::cache_memory().unwrap();
+
+        // 실패 경로에서도 가드가 드롭되며 clear_cache를 부른다 — 패닉하지 않으면 통과.
+        let _ = returns_early(true);
+        let _ = returns_early(false);
+
+        let after = mlx_rs::memory::cache_memory().unwrap();
+        assert!(after <= before, "clear_cache 뒤에는 캐시가 늘어 있지 않아야 한다");
+    }
 
     #[test]
     #[ignore] // 실제 가중치를 받아 추론을 돌린다 — CI 기본 실행에서 제외
