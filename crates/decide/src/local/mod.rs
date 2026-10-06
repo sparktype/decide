@@ -355,12 +355,25 @@ mod tests {
 
     #[test]
     fn pinned_weights_dir_treats_blank_as_unset() {
-        // 병렬 테스트와 환경 변수를 다투지 않도록 이 테스트만 CLEF_WEIGHTS를 만진다.
+        // CLEF_WEIGHTS가 공백이면 pinned_weights_dir가 config.toml로 넘어간다 — 실제
+        // $HOME에 있을 수 있는 config.toml을 보지 않도록 이 테스트만의 임시 HOME을 쓴다.
+        let home = std::env::temp_dir().join(format!(
+            "decide-local-weights-blank-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&home).unwrap();
+        std::env::set_var("HOME", &home);
         std::env::set_var("CLEF_WEIGHTS", "  ");
         let blank = pinned_weights_dir();
         std::env::set_var("CLEF_WEIGHTS", " /tmp/clef-weights-pinned ");
         let set = pinned_weights_dir();
         std::env::remove_var("CLEF_WEIGHTS");
+        std::env::remove_var("HOME");
+        let _ = std::fs::remove_dir_all(&home);
         assert_eq!(blank, None);
         assert_eq!(set, Some(PathBuf::from("/tmp/clef-weights-pinned")));
     }
