@@ -10,11 +10,23 @@ use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
-/// `CLEF_WEIGHTS`(공백만이면 미설정)가 가리키는 디렉터리. 설정돼 있으면 그 안에서만 찾는다.
+/// `CLEF_WEIGHTS` 환경변수, 없으면 `config.toml`의 `[local].weights`(둘 다 공백만이면 미설정).
 fn pinned_weights_dir() -> Option<PathBuf> {
-    let value = std::env::var("CLEF_WEIGHTS").ok()?;
-    let value = value.trim();
-    (!value.is_empty()).then(|| PathBuf::from(value))
+    let env = std::env::var("CLEF_WEIGHTS")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .map(|v| v.trim().to_string());
+    let value = match env {
+        Some(value) => Some(value),
+        None => {
+            let (file, warnings) = crate::config::load_from_disk(std::env::var("HOME").ok().as_deref());
+            for warning in &warnings {
+                eprintln!("{warning}");
+            }
+            file.local_weights
+        }
+    };
+    value.map(PathBuf::from)
 }
 
 struct Runtime {
@@ -316,6 +328,35 @@ mod tests {
         std::env::remove_var("CLEF_WEIGHTS");
         assert_eq!(blank, None);
         assert_eq!(set, Some(PathBuf::from("/tmp/clef-weights-pinned")));
+    }
+
+    #[test]
+    fn pinned_weights_dir_falls_back_to_config_file_when_env_is_unset() {
+        let home = std::env::temp_dir().join(format!(
+            "decide-local-weights-cfg-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(home.join(".config/decide")).unwrap();
+        std::fs::write(
+            home.join(".config/decide/config.toml"),
+            "[local]\nweights = \"/from/file\"\n",
+        )
+        .unwrap();
+
+        std::env::remove_var("CLEF_WEIGHTS");
+        std::env::set_var("HOME", &home);
+        assert_eq!(pinned_weights_dir(), Some(PathBuf::from("/from/file")));
+
+        std::env::set_var("CLEF_WEIGHTS", "/from/env");
+        assert_eq!(pinned_weights_dir(), Some(PathBuf::from("/from/env")));
+
+        std::env::remove_var("CLEF_WEIGHTS");
+        std::env::remove_var("HOME");
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]
