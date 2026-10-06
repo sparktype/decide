@@ -135,6 +135,16 @@ or `.claude/settings.json`, restart Claude Code.
   local, via `local::warmup`. Measured on M1 Max, release: warm backbone is 92-94% of the call
   (464ms at 145 tokens, 2277ms at 861), head 33-117ms, host copy under 2ms. candle uses the
   `accelerate` feature, which halves the head on long inputs (117ms to 58ms).
+  MLX streams only work on the thread that created them, so all local work (load, preload,
+  inference) runs on one dedicated `decide-local` thread (`on_worker` in `local/mod.rs`); calling the
+  model from the daemon's UDS, HTTP, or preload threads would otherwise fail with "There is no
+  Stream(cpu, 0) in current thread". `local::infer_many` (used by `decide_many` for two or more
+  questions) computes the shared prefix once (system prompt + state + `SCHEMA FIELDS`, the first
+  `SHARED_PREFIX_TEXT_SEGMENTS` text segments) and each question continues from it: attention K/V
+  with a rope offset, gated-delta conv and delta state carried through the Metal kernel
+  (`PrefixState`, `prefill_prefix`, `hidden_states_with` in `mlx_backbone.rs`). It falls back to a
+  full pass when a question's tokens do not start with the prefix. Measured: 4 questions on an
+  865-token state take 3.8s instead of 9.6s (2.5x), answers within 0.001 of the per-question path.
 - `mcp.rs` speaks newline-delimited JSON-RPC. Tool failures are `isError` results. It
   is transport-agnostic (`handle_message(&Value, &Env, &mut T) -> Option<Value>`) and
   is reused as-is by both the stdio loop (`main.rs::run_mcp`) and `http.rs`'s HTTP handler.

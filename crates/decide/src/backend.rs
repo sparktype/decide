@@ -1,6 +1,6 @@
 use crate::local;
 use crate::protocol::{
-    parse_arguments, parse_many, validate, validate_many, DecideManyResult, DecideResult,
+    parse_arguments, parse_many, validate, validate_many, DecideManyResult, DecideResult, Question,
 };
 use crate::typesafe::{self, LiveTransport, Transport};
 use serde_json::{json, Map, Value};
@@ -118,9 +118,9 @@ pub fn decide_many<T: Transport>(
     let backend = select_backend(env.backend.as_deref(), env.api_key.as_deref())?;
     if backend == Backend::Local {
         let start = millis();
+        let refs: Vec<&Question> = questions.iter().map(|(_, question)| question).collect();
         let mut answers = Map::new();
-        for (id, question) in &questions {
-            let answer = local::infer(&incoming.state, question)?;
+        for ((id, _), answer) in questions.iter().zip(local::infer_many(&incoming.state, &refs)?) {
             answers.insert(id.clone(), answer);
         }
         let latency_ms = millis() - start;
