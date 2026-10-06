@@ -107,11 +107,16 @@ or `.claude/settings.json`, restart Claude Code.
   `jev-latest`. Choice criteria are `{option: option}` in insertion order. Retry 429
   and 529 once after one second. Choice above 255 options and score above 10 levels
   fail before the request.
-- `local/mod.rs` resolves weights (`CLEF_WEIGHTS` env override, else the HuggingFace
+- `local/mod.rs` resolves weights (`CLEF_WEIGHTS` env override, else
+  `~/.config/decide/config.toml`'s `[local].weights`, else the HuggingFace
   cache; `ensure_weights`/`resolve_pinned`/`download_weights`), lazily builds the backbone + joint
   head + tokenizer once per process (`runtime()`, a `OnceLock`), and exposes
   `infer` (state + question → the same answer shape as TypeSafe, via
-  `postprocess::to_answer`). `local/mlx_backbone.rs` is the MLX port of the Qwen3.5
+  `postprocess::to_answer`). `download_weights` also honors
+  `HF_ENDPOINT`/`HF_HOME`/`HF_TOKEN` env vars (via `ApiBuilder::from_env`,
+  previously unused — `Api::new()` ignored them) or the same keys under
+  `config.toml`'s `[local]` section when the env var is unset; README
+  documents the full schema. `local/mlx_backbone.rs` is the MLX port of the Qwen3.5
   hybrid-attention forward pass (full attention plus a gated-delta Metal kernel); it hands the
   head the hidden states and only the option tokens' dequantized lm_head rows (`head_inputs`).
   `local/joint_head.rs` is the from-scratch

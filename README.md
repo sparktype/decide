@@ -273,6 +273,24 @@ Cloudflare의 Clef-flash(Qwen3.5-9B 하이브리드 백본)를 MLX 8비트로 Ap
 
 환경 변수는 `DECIDE_BACKEND`(`typesafe` 또는 `local`), `TYPESAFE_API_KEY`, `CLEF_WEIGHTS`(로컬 가중치 디렉터리)다. 현재 버전은 0.5.0이다. formula는 GitHub Release의 사전 빌드 arm64 바이너리(`decide`와 GPU 커널 묶음 `mlx.metallib`)를 그대로 설치한다.
 
+같은 값을 `~/.config/decide/config.toml`로도 지정할 수 있다. 환경변수가 있으면
+같은 키의 TOML 값은 무시한다. 파일이 없으면 조용히 건너뛰고, 읽기나 TOML 파싱에
+실패하면 stderr에 경고만 내고 그 레이어 없이 계속 진행한다(`decide`를 멈추지
+않는다).
+
+```toml
+backend = "local"        # DECIDE_BACKEND와 같은 뜻
+
+[typesafe]
+api_key = "sk-..."       # TYPESAFE_API_KEY와 같은 뜻
+
+[local]
+weights = "/path/to/weights"   # CLEF_WEIGHTS와 같은 뜻
+hf_endpoint = "https://nexus.example/hf-proxy"  # HF_ENDPOINT와 같은 뜻
+hf_home = "/path/to/cache"      # HF_HOME과 같은 뜻
+hf_token = "hf_..."             # HF_TOKEN과 같은 뜻(hf-hub 자체는 이 환경변수를 지원하지 않는다)
+```
+
 ## 개발
 
 런타임은 `crates/decide`다. 기본 테스트는 가중치와 네트워크 없이 돈다.
