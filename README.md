@@ -269,9 +269,9 @@ Cloudflare의 Clef-flash(Qwen3.5-9B 하이브리드 백본)를 MLX 8비트로 Ap
 | `decide hook` | `PostToolUse` 훅. `decide` 결과를 한 줄로 보여 준다. |
 | `decide gate <이름>` / `--show` / `stats` | `PreToolUse` 훅. Bash 명령을 판정하거나, 게이트 설정을 보여 주거나, 감사 로그를 집계한다. |
 
-`decide --version`(`-V`)은 `decide 0.5.0`처럼 버전 한 줄을, `decide --help`(`-h`)와 인자 없는 `decide`는 전체 도움말을, `decide <명령> --help`와 `decide help <명령>`은 그 명령의 도움말을 낸다. 도움말과 버전은 stdout에 쓰고 종료 코드 0이다. 알 수 없는 명령이나 잘못된 인자는 stderr에 이유를 쓰고 종료 코드 2다. `mcp --help`와 `daemon --help`도 서버를 시작하지 않는다.
+`decide --version`(`-V`)은 `decide 0.6.0`처럼 버전 한 줄을, `decide --help`(`-h`)와 인자 없는 `decide`는 전체 도움말을, `decide <명령> --help`와 `decide help <명령>`은 그 명령의 도움말을 낸다. 도움말과 버전은 stdout에 쓰고 종료 코드 0이다. 알 수 없는 명령이나 잘못된 인자는 stderr에 이유를 쓰고 종료 코드 2다. `mcp --help`와 `daemon --help`도 서버를 시작하지 않는다.
 
-환경 변수는 `DECIDE_BACKEND`(`typesafe` 또는 `local`), `TYPESAFE_API_KEY`, `CLEF_WEIGHTS`(로컬 가중치 디렉터리)다. 현재 버전은 0.5.0이다. formula는 GitHub Release의 사전 빌드 arm64 바이너리(`decide`와 GPU 커널 묶음 `mlx.metallib`)를 그대로 설치한다.
+환경 변수는 `DECIDE_BACKEND`(`typesafe` 또는 `local`), `TYPESAFE_API_KEY`, `CLEF_WEIGHTS`(로컬 가중치 디렉터리)다. 현재 버전은 0.6.0이다. formula는 GitHub Release의 사전 빌드 arm64 바이너리(`decide`와 GPU 커널 묶음 `mlx.metallib`)를 그대로 설치한다.
 
 같은 값을 `~/.config/decide/config.toml`로도 지정할 수 있다. 환경변수가 있으면
 같은 키의 TOML 값은 무시한다. 파일이 없으면 조용히 건너뛰고, 읽기나 TOML 파싱에
