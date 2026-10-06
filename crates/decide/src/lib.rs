@@ -1,5 +1,6 @@
 pub mod backend;
 pub mod claude;
+pub mod config;
 pub mod daemon;
 pub mod gate;
 pub mod help;
