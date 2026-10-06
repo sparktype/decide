@@ -68,7 +68,10 @@ fn claude_flag_registers_the_mcp_server_then_adds_the_hooks() {
     let output = run(&["install", "--claude"], &dir, &bin);
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let args = std::fs::read_to_string(&log).unwrap();
-    assert!(args.contains("mcp add -s user decide"), "{args}");
+    assert!(
+        args.contains("mcp add -s user --transport http decide http://127.0.0.1:48080/mcp"),
+        "{args}"
+    );
     let settings = dir.join(".claude").join("settings.json");
     assert_eq!(
         read_json(&settings),
