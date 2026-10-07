@@ -24,7 +24,7 @@ brew install sparktype/tap/decide     # 설치. Rust 툴체인은 필요 없다.
 decide install --claude               # MCP 등록 + 표시 훅 + 게이트 훅을 한 번에
 ```
 
-`decide install`만 실행하면 MCP를 HTTP transport로 등록(`claude mcp add -s user --transport http decide http://127.0.0.1:48080/mcp`)하고, 그 포트가 비어 있으면 `decide daemon`을 한 번 띄운다. `--claude`는 여기에 훅 두 개를 `~/.claude/settings.json`에 더한다. 여러 번 실행해도 안전하고, 바꾸기 전에 `settings.json.bak-decide`로 백업한다. 등록한 뒤에는 Claude Code 세션을 다시 연다. 이미 떠 있는 세션은 등록을 다시 읽지 않는다. 데몬은 재부팅 후 자동으로 뜨지 않으므로, 재부팅했는데 `decide` 도구가 연결에 실패하면 `decide daemon &`으로 다시 띄운다.
+`decide install`만 실행하면 MCP를 stdio로 등록(`claude mcp add -s user decide -- /opt/homebrew/bin/decide mcp`)한다. Claude Code가 세션마다 `decide mcp`를 직접 띄우므로 데몬이 필요 없다. `--claude`는 여기에 훅 두 개를 `~/.claude/settings.json`에 더한다(게이트 훅은 데몬이 꺼져 있으면 스스로 띄운다). 여러 번 실행해도 안전하고, 바꾸기 전에 `settings.json.bak-decide`로 백업한다. 이미 `decide`가 등록돼 있으면(예를 들어 0.7.0까지의 HTTP 등록) 그대로 두므로, 옮기려면 `claude mcp remove -s user decide` 뒤에 다시 `decide install`을 실행한다. 등록한 뒤에는 Claude Code 세션을 다시 연다. 이미 떠 있는 세션은 등록을 다시 읽지 않는다.
 
 **백엔드를 정한다.** 아무것도 안 하면 `TYPESAFE_API_KEY`가 있을 때 TypeSafe, 없을 때 로컬을 쓴다.
 
@@ -48,14 +48,14 @@ Claude Code에서 로컬로 고정하려면 `~/.claude/settings.json`에 `env`�
 
 **제대로 붙었는지 본다.** 아무 판단이나 한 번 부르고 결과의 `routing.backend`가 원하는 값(`local` 또는 `typesafe`)인지 확인한다. 게이트는 `decide gate --show`로 설정을 볼 수 있다.
 
-프로젝트 스코프로만 등록하려면 `.mcp.json`을 직접 쓴다. 데몬이 떠 있어야 한다(`decide daemon &`).
+프로젝트 스코프로만 등록하려면 `.mcp.json`을 직접 쓴다.
 
 ```json
 {
   "mcpServers": {
     "decide": {
-      "type": "http",
-      "url": "http://127.0.0.1:48080/mcp"
+      "command": "/opt/homebrew/bin/decide",
+      "args": ["mcp"]
     }
   }
 }
@@ -137,7 +137,7 @@ decide_many(
 
 ### 상주 데몬
 
-`decide daemon`은 한 프로세스에서 두 트랜스포트를 함께 서빙한다 — 게이트 훅용 Unix 소켓(`~/.cache/decide/decide.sock`)과 MCP용 로컬 HTTP(`http://127.0.0.1:48080/mcp`). 백엔드 호출은 `decide`가 직접 하지 않고 서버로 보내므로 데몬에 모델은 올라가지 않는다. 둘 다 30분 동안 요청이 없으면 끝난다. 게이트 요청(`state`, `type`, `instructions`, `options`, `criteria`, 백엔드가 모두 같음)은 최대 64개까지 캐시하며, 캐시된 답은 `routing.cached: true`, `latency_ms: 0`이다. 훅은 데몬이 꺼져 있으면 띄워 두고, `decide install`도 설치 시점에 한 번 띄운다 — 재부팅 뒤에는 자동으로 뜨지 않으니 수동으로 `decide daemon &`을 실행한다. 클라이언트의 버전이 데몬과 다르면(UDS 쪽만) 데몬이 스스로 끝나 새로 뜨므로 업그레이드 뒤 옛 데몬이 남지 않는다. 옛 stdio MCP 서버(`decide mcp`)는 호환을 위해 남아 있지만 `decide install`은 더 이상 그 경로로 등록하지 않는다.
+`decide daemon`은 한 프로세스에서 두 트랜스포트를 함께 서빙한다 — 게이트 훅용 Unix 소켓(`~/.cache/decide/decide.sock`)과 MCP용 로컬 HTTP(`http://127.0.0.1:48080/mcp`). MCP는 0.8.0부터 stdio(`decide mcp`)로 등록하므로 이 HTTP 엔드포인트는 직접 쓰고 싶을 때의 선택지다. 백엔드 호출은 `decide`가 직접 하지 않고 서버로 보내므로 데몬에 모델은 올라가지 않는다. 둘 다 30분 동안 요청이 없으면 끝난다. 게이트 요청(`state`, `type`, `instructions`, `options`, `criteria`, 백엔드가 모두 같음)은 최대 64개까지 캐시하며, 캐시된 답은 `routing.cached: true`, `latency_ms: 0`이다. 훅은 데몬이 꺼져 있으면 띄워 두고, `decide install`도 설치 시점에 한 번 띄운다 — 재부팅 뒤에는 자동으로 뜨지 않으니 수동으로 `decide daemon &`을 실행한다. 클라이언트의 버전이 데몬과 다르면(UDS 쪽만) 데몬이 스스로 끝나 새로 뜨므로 업그레이드 뒤 옛 데몬이 남지 않는다. stdio MCP 서버(`decide mcp`)는 Claude Code가 세션마다 띄우는 별도 프로세스라 데몬과 캐시를 공유하지 않는다.
 
 ## 결과를 눈으로 보기 (`decide hook`)
 
@@ -265,9 +265,9 @@ decide_many(
 
 | 명령 | 하는 일 |
 | --- | --- |
-| `decide mcp` | stdio MCP 서버를 실행한다(옛 방식, 호환용으로 남아 있음). |
+| `decide mcp` | stdio MCP 서버를 실행한다. `decide install`이 등록하는 명령이다. |
 | `decide daemon` | UDS(게이트)와 HTTP(MCP, `127.0.0.1:48080`)를 함께 서빙하는 상주 데몬을 실행한다. |
-| `decide install [--claude]` | Claude Code에 MCP를 HTTP transport로 등록하고 데몬이 안 떠 있으면 띄운다. `--claude`는 표시 훅과 게이트 훅도 넣는다. |
+| `decide install [--claude]` | Claude Code에 MCP를 stdio로 등록한다. `--claude`는 표시 훅과 게이트 훅도 넣는다. |
 | `decide hook` | `PostToolUse` 훅. `decide` 결과를 한 줄로 보여 준다. |
 | `decide gate <이름>` / `--show` / `stats` | `PreToolUse` 훅. Bash 명령을 판정하거나, 게이트 설정을 보여 주거나, 감사 로그를 집계한다. |
 

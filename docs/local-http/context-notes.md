@@ -28,3 +28,18 @@
   비어 있다.
 - 포뮬러 `packaging/homebrew/decide.rb`는 일부러 안 바꿨다. 새 릴리스 자산의 url·sha256이 없으면 0.7.0 꾸러미(metallib 포함)를 `decide`만
   설치하게 되어 깨진다. 릴리스 때 함께 바꾼다(체크리스트).
+
+## 2026-10-07 MCP 등록을 stdio로
+
+- 질문: stdio가 성능에 유리한가. 측정(`tools/list`, M1 Max, release)으로 전송 오버헤드만 비교했다. stdio 메시지당 0.054ms(p95 0.097),
+  데몬 HTTP 요청당 0.394ms(p95 0.690, 요청마다 새 연결). 차이 0.3ms는 백엔드 호출(Kev 재호출 약 100ms, 첫 호출 약 470ms)에 묻힌다.
+  stdio 프로세스 기동은 5ms 안팎이고, 새로 빌드한 바이너리의 첫 실행만 457ms였다(콜드 효과).
+- 그래서 성능이 아니라 의존성 때문에 바꾼다. 데몬이 꺼지면 MCP 도구가 연결 실패이던 문제가 사라지고, 모델을 안 올리니 세션마다
+  프로세스 하나가 가볍다(0.7.0까지는 세션마다 Clef-flash 10GB라서 데몬 공유가 필요했다).
+- 바뀐 것: `install_mcp_args`가 `claude mcp add -s user decide -- /opt/homebrew/bin/decide mcp`를 만든다. `decide install --claude`는 더 이상
+  데몬을 띄우지 않는다(게이트 훅이 스스로 띄운다). 저장소 `.mcp.json`은 stdio 명령으로 바꿨다. 데몬의 HTTP 엔드포인트는 남겼다.
+- 이미 `decide`가 등록돼 있으면(0.7.0의 HTTP 등록) 지우지 않고 성공으로 끝내되 `claude mcp remove -s user decide` 안내를 낸다. 사용자 설정을
+  말없이 지우지 않기 위해서다.
+- 도구 이름은 그대로 `mcp__decide__decide`라서 표시 훅과 모드의 매처는 바뀌지 않는다.
+- 확인: 임시 `CLAUDE_CONFIG_DIR`에서 같은 인자로 `claude mcp add` 후 `claude mcp list`가 `✔ Connected`(stdio)를 보였다. 사용자 실제 설정은 건드리지 않았다.
+- 실제 사용 중인 등록(HTTP)은 일부러 옮기지 않았다. 0.8.0이 설치돼야 `/opt/homebrew/bin/decide`가 새 동작을 가진다.

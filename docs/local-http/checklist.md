@@ -39,3 +39,11 @@
 - [ ] `packaging/homebrew/decide.rb`와 tap의 formula를 0.8.0 url·sha256으로 바꾸고 `mlx.metallib` 설치·검사를 뺀다
 - [ ] 실행 중인 옛 데몬(0.7.0)을 `pkill -f "decide daemon"`으로 끄고 `/mcp`로 다시 연결한다
 - [ ] 모드(`sparktype/claude-plugins`의 decide)가 읽는 `CLEF_WEIGHTS`·`DECIDE_LOCAL_REPO`와 백엔드 박스의 가중치 표시를 `DECIDE_LOCAL_URL` 기준으로 바꾼다
+
+## 추가: MCP 등록을 stdio로 (2026-10-07)
+
+- [x] `install_mcp_args` 테스트와 구현, 데몬 자동 기동 제거
+- [x] 기존 등록이 있을 때 이전 방법 안내(테스트 포함)
+- [x] `.mcp.json`, `tests/project_config.rs`, `tests/install_claude.rs`, 도움말
+- [x] 임시 설정 폴더에서 `claude mcp add` 후 `✔ Connected`
+- [ ] 릴리스 뒤 실제 등록을 옮긴다: `claude mcp remove -s user decide && decide install`

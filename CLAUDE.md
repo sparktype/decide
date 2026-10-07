@@ -45,12 +45,14 @@ formula file still names the 0.7.0 release (url, sha256, and the `mlx.metallib` 
 holds only `decide`. GitHub Actions builds `crates/decide` and uploads a release asset when a `v*`
 tag is pushed; the formula downloads that prebuilt arm64 binary and installs it, no Rust toolchain
 required at install time. The API key stays in the environment as `TYPESAFE_API_KEY`.
-`.mcp.json` points `decide` at `type: "http"`, `url: "http://127.0.0.1:48080/mcp"` — a
-decide daemon must already be listening there. Running `decide install` registers the
-tool in Claude Code's user scope the same way, by shelling out to `claude mcp add -s
-user --transport http decide http://127.0.0.1:48080/mcp`, and spawns `decide daemon`
-if that port isn't already bound; this is an alternative to editing `.mcp.json` by
-hand. The daemon does not survive a reboot — run `decide daemon &` manually after one.
+`.mcp.json` points `decide` at the stdio command `/opt/homebrew/bin/decide mcp`, which Claude Code
+starts per session (about 5ms, no model to load), so no daemon is needed for MCP. Running
+`decide install` registers the tool in Claude Code's user scope the same way, by shelling out to
+`claude mcp add -s user decide -- /opt/homebrew/bin/decide mcp`; an existing `decide` registration
+(for example the 0.7.0 HTTP one) is left alone with a hint to `claude mcp remove -s user decide`
+first. The daemon is only for the gate hook, which starts it when the socket is down; it does not
+survive a reboot and needs no manual start. Measured transport cost (`tools/list`, M1 Max): stdio
+0.05ms per message, HTTP to the daemon 0.4ms, against backend calls of 100ms and up.
 
 Runtime tests, no model server and no network (`tests/daemon.rs` binds :48080, so it fails while a real `decide daemon` is running):
 
@@ -70,8 +72,8 @@ Daemon socket `~/.cache/decide/decide.sock`, 30 minutes idle:
 /opt/homebrew/bin/decide daemon
 ```
 
-`decide mcp` is the stdio MCP server (kept for compatibility; `decide install` no
-longer registers this path — see `decide daemon`'s HTTP transport below). The command
+`decide mcp` is the stdio MCP server that `decide install` registers (the daemon's HTTP transport
+below stays available but nothing registers it). The command
 line follows the usual conventions (`src/help.rs`
 owns every help text and keeps the command list in one place): `-h`/`--help` or no arguments print the
 overview, `<command> --help` and `help <command>` print that command's help, `-V`/`--version` print
@@ -135,9 +137,8 @@ or `.claude/settings.json`, restart Claude Code.
   only), so an upgraded client never keeps talking to an old daemon (`handle_request`
   returns `(reply, keep_serving)`). Requests without the field behave as before.
 - `main.rs` routes `mcp`, `daemon`, `install`, `hook`, and `gate` subcommands (`gate` also has `--show` and `stats`). No arguments prints
-  help (see `help.rs`). `install` shells out to `claude mcp add -s user --transport http
-  decide http://127.0.0.1:48080/mcp` (`install_mcp_args`) and, if that port isn't bound
-  yet, spawns `decide daemon` via the same mechanism the gate uses (`spawn_daemon_if_needed`).
+  help (see `help.rs`). `install` shells out to `claude mcp add -s user decide -- /opt/homebrew/bin/decide mcp`
+  (`install_mcp_args`) and no longer spawns the daemon.
 - `claude.rs` merges hooks into Claude Code's user settings for `decide install --claude`:
   `add_hook_spec` (pure) appends one group for a `HookSpec` (event, matcher, command, timeout), idempotent on
   the exact command within that event, refusing shapes it cannot merge into; `install_hooks` installs the display

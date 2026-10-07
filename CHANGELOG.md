@@ -13,6 +13,7 @@
 - 로컬 서버가 꺼져 있으면 `scripts/serve-local.sh`를 안내하는 오류로 끝나고 다른 백엔드로 넘어가지 않는다.
 - choice 255개·score 10등급 한도 검사는 TypeSafe에서만 호출 전에 한다. 로컬은 서버가 판단한다.
 - `decide_many`는 로컬에서도 질문 전체를 한 번의 요청으로 보낸다.
+- `decide install`이 MCP를 stdio(`claude mcp add -s user decide -- /opt/homebrew/bin/decide mcp`)로 등록하고 데몬을 띄우지 않는다. 이미 등록돼 있으면 그대로 두고 옮기는 방법을 알려 준다. 저장소 `.mcp.json`도 stdio로 바꿨다. 데몬의 HTTP 엔드포인트는 남아 있다.
 - 릴리스 압축 파일에는 `decide`만 들어간다(`mlx.metallib` 없음). 릴리스 워크플로에서 Xcode 선택, Metal
   툴체인, cmake 단계를 뺐다.
 
