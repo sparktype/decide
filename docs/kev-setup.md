@@ -14,11 +14,45 @@ Kev는 Qwen3.5 위에 얹은 작은 판단 모델 묶음이다(`jaredpalmer/kev-
 | 같은 state를 다시 보냄 | 해당 없음 | 100~195ms | 서버가 state를 캐시 |
 
 - 응답 속도가 우선이면 Kev-4B가 낫다. 서버 메모리는 약 5.3GB다.
-- 정확도는 Kev가 낮을 가능성이 크다. Kev-4B의 Decision Index(breadth-v1)는 0.690으로 Jev의 0.757보다 낮다(모델 카드의 자체 수치). 이 저장소의 골든 5케이스에서는 Clef-flash 오라클과 판단이 3건 같았고, 1건은 반대였고, 1건(11개 숫자 옵션)은 확률이 거의 균등해 판단이 서지 않았다. 표본이 작아서 우열의 근거는 아니다. 중요한 판단에 쓰기 전에 실제 질문으로 일치율을 재야 한다.
+- 정확도는 Kev가 낮을 가능성이 크다. Kev-4B는 Jev보다 낮다. 모델 카드(breadth-v1 test)는 0.690 대 0.757이고, Kev README의 chance-corrected 지수(14개 공개 데이터셋, 학습에 쓰이지 않은 출처)는 38.0 대 54.0이다. 둘은 척도가 달라 서로 비교하지 않고, 모두 Kev 쪽 자체 수치다. 이 저장소의 골든 5케이스에서는 Clef-flash 오라클과 판단이 3건 같았고, 1건은 반대였고, 1건(11개 숫자 옵션)은 확률이 거의 균등해 판단이 서지 않았다. 표본이 작아서 우열의 근거는 아니다. 중요한 판단에 쓰기 전에 실제 질문으로 일치율을 재야 한다.
 - 확률이 덜 극단적이다(같은 `noul` 질문에서 Clef-flash 0.957, Kev 0.761). `noul`과 `confidence` 임계값은 Kev 기준으로 다시 정한다. 두 백엔드의 확률은 서로 보정되어 있지 않다.
 - 사무실 M2 Pro 32GB는 이 Mac(M1 Max)보다 GPU 연산이 약 0.65배라서 지연이 약 1.5배가 된다고 추정한다(측정하지 않았다). Kev-4B(약 5GB)와 Clef-flash 8비트(약 10.7GB) 모두 32GB에 여유 있게 들어가고, Kev-27B(51GB)는 들어가지 않는다.
 
 측정 기록과 결정은 [`docs/mlx-perf/context-notes.md`](mlx-perf/context-notes.md)에 있다.
+
+## 호환 모델 목록
+
+"검증됨"은 이 저장소에서 `decide`로 직접 돌려 본 것이고, "미검증"은 문서나 모델 카드로만 아는 것이다. 이 표에 없는 모델은 호환 여부를 모른다.
+
+### Kev 서버로 쓰는 모델 (TypeSafe 백엔드의 `url`)
+
+| 허깅페이스 ID | 베이스 | 상태 | 확인한 내용 |
+| --- | --- | --- | --- |
+| `jaredpalmer/kev-4b` | Qwen3.5-4B-Base | **검증됨** | `kev.serve`(MLX, bf16, `device: mps`)로 띄우고 `decide_many`가 끝까지 동작한다. 지연·판단 일치는 위 "언제 쓰나". 서버 메모리 약 5.3GB. Kev 저장소 커밋 `5e42a7a`, `uv sync --extra serve`. |
+| `jaredpalmer/kev-0.8b` | Qwen3.5-0.8B-Base | 미검증 | README는 "모든 Apple Silicon에서 돈다"고 한다. 더 빠르지만 새 출처 정확도가 Kev-4B보다 낮다(README 표 0.648 대 0.817, 개발셋). |
+| `jaredpalmer/kev-9b` | Qwen3.5-9B-Base | 미검증 | 32GB Mac 이상에서 돌 것으로 예상하지만 측정되지 않았다고 README가 밝힌다. 약 17GB. |
+| `jaredpalmer/kev-27b` | Qwen3.8-27B | 미검증, 사무실(32GB)에는 불가 | 가중치 51GB. README는 96~128GB Mac을 예상한다. |
+
+모두 Apache-2.0이다. `kev.serve --run <ID>`로 지정한다(위 "설정 절차").
+
+서버가 `decide`와 호환되려면 `POST /v1/systemone`이 TypeSafe와 같은 요청·응답 형식을 말해야 한다. `decide`는 `model: "jev-latest"`를 보내고(Kev가 이 별칭을 받는다), 응답의 `answers`를 질문 id로 읽는다. Kev가 아닌 서버는 이 점을 직접 확인해야 하며, 이 저장소에서는 Kev 외의 서버를 시험하지 않았다.
+
+### 로컬 백엔드로 쓰는 모델 (`DECIDE_LOCAL_REPO` / `[local].repo` / `CLEF_WEIGHTS`)
+
+로컬 백엔드는 Clef-flash 구조(Qwen3.5-9B 하이브리드 백본 + `joint_head.safetensors`)만 읽는다. 저장소(또는 `CLEF_WEIGHTS` 디렉터리)에 `config.json`, `model.safetensors.index.json`, 샤드, `joint_head.safetensors`가 있어야 하고, 양자화는 한 가지 비트 수의 affine(group 64)이어야 한다.
+
+| 허깅페이스 ID | 상태 | 확인한 내용 |
+| --- | --- | --- |
+| `mlx-community/clef-flash-8bit` | **검증됨(기본)** | parity 5/5 일치, 로짓 최대 차이 0.095. 웜 지연 150토큰 0.5초, 860토큰 2.3초(M1 Max). 약 10.7GB. |
+| `mlx-community/clef-flash-4bit` | **검증됨** | 로딩 정상, parity 판단 5/5 일치지만 로짓 최대 차이 1.157로 커진다. 속도는 8비트와 같고 디스크는 약 6GB. `decide_many` 접두 재사용도 동작한다. |
+| `mlx-community/clef-4bit`, `clef-8bit` (Clef 27B) | 미검증 | 백본은 설정 파일 기반이라 로딩될 가능성이 있으나 `joint_head` 차원이 다를 수 있다. 4비트 약 15GB, 8비트 약 28GB라 32GB Mac에는 4비트만 맞다. |
+| `TrevorJS/clef-flash-mlx-4bit`, `-8bit`, `aufklarer/Clef-flash-9B-MLX-4bit` 등 | 미검증 | 샤드 구성과 `joint_head` 유무를 확인하지 않았다. |
+
+토크나이저는 어느 쪽이든 `Cloudflare/clef-flash`의 `tokenizer.json`을 HF 캐시에서 읽는다.
+
+### 시험하지 않은 후보
+
+Von(`wfzyx/von-1.0`), Laya, Nimble, NeoHorse-Jev-4B, `autotrust/JEV-*`는 조사만 했고 `decide`에 붙여 보지 않았다. 이 모델들이 System One 형식의 서버를 제공하는지, 맥(MLX)에서 도는지는 확인하지 못했다(Von은 자체 SDK를 쓴다고 모델 카드에 적혀 있다). 조사 결과와 제외 이유는 [`docs/mlx-perf/context-notes.md`](mlx-perf/context-notes.md)에 있다.
 
 ## 설정 절차
 
