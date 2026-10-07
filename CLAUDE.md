@@ -209,8 +209,10 @@ or `.claude/settings.json`, restart Claude Code.
   `decide gate stats`; it reports numbers only. `bash_risk.rs` holds the pure
   logic (secret redaction, the three-way `allow`/`ask`/`deny` choice request, prefilter that never applies to
   commands containing shell metacharacters, probabilities → verdict). `output.rs` turns an outcome into hook
-  output JSON and the reasoning shown to the user (audit mode emits `systemMessage` only and never a
-  `permissionDecision`; enforce adds `permissionDecision` for deny/ask) and renders `--show`. `client.rs`
+  output JSON and the reasoning passed to the model via `hookSpecificOutput.additionalContext` (not
+  `systemMessage`, which Claude Code shows the user but never forwards to the model; audit mode emits
+  `additionalContext` only and never a `permissionDecision`; enforce adds `permissionDecision` for deny/ask
+  alongside it) and renders `--show`. `client.rs`
   talks to the daemon socket, starts or replaces a daemon, and appends `~/.cache/decide/gate.log`. Every failure
   passes through silently with exit 0 (an unknown gate name is exit 1; exit 2 would block the tool call).
 

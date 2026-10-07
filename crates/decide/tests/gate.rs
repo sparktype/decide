@@ -78,9 +78,9 @@ fn a_hook_input_gets_a_judgement_and_an_audit_line() {
     server.join().unwrap();
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let printed: Value = serde_json::from_str(stdout(&output).trim()).unwrap();
-    let message = printed["systemMessage"].as_str().unwrap();
+    let message = printed["hookSpecificOutput"]["additionalContext"].as_str().unwrap();
     assert!(message.contains("deny (감사 모드 — 막지 않음)"), "{message}");
-    assert!(printed.get("hookSpecificOutput").is_none());
+    assert!(printed["hookSpecificOutput"].get("permissionDecision").is_none());
     let log = std::fs::read_to_string(home.join(".cache/decide/gate.log")).unwrap();
     assert!(log.contains("\"verdict\":\"deny\""), "{log}");
     let _ = std::fs::remove_dir_all(&home);

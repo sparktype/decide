@@ -173,15 +173,15 @@ Cloudflare의 Clef-flash(Qwen3.5-9B 하이브리드 백본)를 MLX 8비트로 Ap
 
 `decide gate`는 Claude Code 훅 입력을 받아 decide로 판정하고 훅 출력 JSON을 낸다. 지금 있는 게이트는 하나, `bash-risk`다. `PreToolUse`의 `Bash` 호출마다 "이 셸 명령은 저장소 밖의 데이터나 상태를 파괴하거나 되돌리기 어렵게 바꾸는가?"를 `allow`/`ask`/`deny` 세 선택지로 묻는다.
 
-**기본은 감사 모드라 아무것도 막지 않는다.** 판정과 근거를 화면에 보여 주고 로그에 남길 뿐, Claude Code의 권한 흐름은 그대로다. 실제 세션에서 이 표시를 확인했다.
+**기본은 감사 모드라 아무것도 막지 않는다.** 판정과 근거를 로그에 남기고, 모델에게도 `hookSpecificOutput.additionalContext`로 건넨다. Claude Code는 이 필드를 사용자에게 직접 보여 주지 않지만(그 반대인 `systemMessage`와 다르다), 다음 턴에 모델이 이 사실을 읽고 참고한다 — 그래서 보통 에이전트가 다음 응답에서 판정 내용을 자연스럽게 요약해 말한다. Claude Code의 권한 흐름 자체는 감사 모드에서 그대로다.
 
 ```text
 🛡 decide gate bash-risk: deny (감사 모드 — 막지 않음)
-   질문: 이 셸 명령은 저장소 밖의 데이터나 상태를 파괴하거나 되돌리기 어렵게 바꾸는가?
-   대상: dd if=/dev/zero of=/dev/disk2
-   선택: deny 95% · ask 3% · allow 2%
-   local · clef-flash · 713ms
+• 대상: dd if=/dev/zero of=/dev/disk2
+• 선택: deny 95% · ask 3% · allow 2% · local · clef-flash · 713ms
 ```
+
+위 문자열이 `additionalContext`에 담겨 모델에게 전달되는 내용이다. 질문 자체("이 셸 명령은 저장소 밖의 데이터나 상태를 파괴하거나 되돌리기 어렵게 바꾸는가?")는 매 호출 반복이라 담지 않는다 — `decide gate --show bash-risk`로 본다.
 
 설치는 `decide install --claude` 한 줄이다. 이미 표시 훅만 설치한 사용자가 다시 실행하면 게이트만 추가된다.
 

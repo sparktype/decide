@@ -1,4 +1,4 @@
-// 게이트 판정을 Claude Code 훅 출력 JSON과 사용자에게 보여 줄 근거 문구로 바꾼다
+// 게이트 판정을 Claude Code 훅 출력 JSON과 모델에게 전달할 근거 문구(additionalContext)로 바꾼다
 use crate::gate::bash_risk::{Probs, Verdict, OPTIONS, QUESTION};
 use crate::gate::config::{self, Config, Display, Loaded, Mode, BASH_RISK};
 use crate::show::{footer, pct, truncate};
@@ -178,29 +178,29 @@ pub fn show_gate(loaded: &Loaded, name: &str, json: bool) -> Option<String> {
 }
 
 /// 훅이 stdout으로 내보낼 JSON. 내보낼 것이 없으면 `None`이다.
-/// 감사 모드는 `systemMessage`만 내고 `permissionDecision`은 절대 내지 않는다.
+/// 사용자에게 보이는 알림 줄(`systemMessage`)은 Claude Code가 모델에 전달하지 않으므로
+/// 쓰지 않는다 — 근거 문구는 `hookSpecificOutput.additionalContext`로 모델에게 바로
+/// 건넨다(다음 모델 요청 때 system reminder로 삽입되어, 모델이 그 턴에서 자연스럽게
+/// 요약해 말할 수 있다). 감사 모드는 이 컨텍스트만 주고 `permissionDecision`은 절대 내지 않는다.
 pub fn hook_output(outcome: &Outcome) -> Option<Value> {
     let decision = match (&outcome.kind, outcome.mode) {
         (Kind::Judged { verdict, probs, .. }, Mode::Enforce) => permission(*verdict, probs, &outcome.gate),
         (Kind::Rule { verdict, pattern }, Mode::Enforce) => rule_permission(*verdict, pattern, &outcome.gate),
         _ => None,
     };
-    let message = message(outcome);
-    if decision.is_none() && message.is_none() {
+    let context = message(outcome);
+    if decision.is_none() && context.is_none() {
         return None;
     }
-    let mut output = json!({});
+    let mut specific = json!({"hookEventName": "PreToolUse"});
     if let Some((decision, reason)) = decision {
-        output["hookSpecificOutput"] = json!({
-            "hookEventName": "PreToolUse",
-            "permissionDecision": decision,
-            "permissionDecisionReason": reason,
-        });
+        specific["permissionDecision"] = Value::String(decision.to_string());
+        specific["permissionDecisionReason"] = Value::String(reason);
     }
-    if let Some(text) = message {
-        output["systemMessage"] = Value::String(text);
+    if let Some(text) = context {
+        specific["additionalContext"] = Value::String(text);
     }
-    Some(output)
+    Some(json!({"hookSpecificOutput": specific}))
 }
 
 /// enforce 모드에서 Claude Code에 넘길 `(permissionDecision, 이유)`. 판정 없음(Allow)은 `None`이다.
@@ -223,10 +223,12 @@ fn rule_permission(verdict: Verdict, pattern: &str, gate: &str) -> Option<(&'sta
     Some((decision, format!("decide gate {gate}: 정적 규칙 `{pattern}`에 걸렸습니다 (판정: {decision}, 모델 호출 없음)")))
 }
 
-/// 사용자에게 보여 줄 근거 문구. 표시 방식(`display`)과 결과 종류에 따라 없을 수 있다.
-/// 고정된 질문 문구(`QUESTION`)는 매 호출 반복이라 보이지 않는다 — `decide gate --show`로 본다.
-/// 훅 systemMessage는 마크다운을 렌더링하지 않으므로(`- `가 `•`로 바뀌지 않는다, 실측 확인됨),
-/// 불릿은 유니코드 `•`를 직접 문자열에 넣는다.
+/// `hookSpecificOutput.additionalContext`로 모델에게 전달할 근거 문구. 표시 방식(`display`)과
+/// 결과 종류에 따라 없을 수 있다. 모델이 다음 턴에 이 사실을 참고해 자기 말로 요약할 것을
+/// 전제로, 명령형 지시가 아니라 사실 진술로 적는다("decide gate가 이렇게 판정했다").
+/// 고정된 질문 문구(`QUESTION`)는 매 호출 반복이라 넣지 않는다 — `decide gate --show`로 본다.
+/// 불릿은 유니코드 `•`를 직접 문자열에 넣는다(마크다운 `- `는 터미널에서 그대로 하이픈으로
+/// 보이지만, additionalContext는 모델이 읽는 텍스트이므로 렌더링 여부와 무관하게 통일한다).
 fn message(outcome: &Outcome) -> Option<String> {
     let head = format!("🛡 decide gate {}:", outcome.gate);
     let command = truncate(&outcome.command);
@@ -320,7 +322,7 @@ mod tests {
     }
 
     fn message(output: &Option<Value>) -> String {
-        output.as_ref().unwrap()["systemMessage"].as_str().unwrap().to_string()
+        output.as_ref().unwrap()["hookSpecificOutput"]["additionalContext"].as_str().unwrap().to_string()
     }
 
     #[test]
@@ -328,7 +330,10 @@ mod tests {
         let output = hook_output(&judged(Verdict::Deny, Mode::Audit, Display::Decisions));
         let expected = "🛡 decide gate bash-risk: deny (감사 모드 — 막지 않음)\n• 대상: rm -rf ~/Downloads/old\n• 선택: deny 62% · ask 30% · allow 8% · local · clef-flash · 540ms";
         assert_eq!(message(&output), expected);
-        assert!(output.unwrap().get("hookSpecificOutput").is_none(), "감사 모드는 판정을 내리면 안 된다");
+        assert!(
+            output.unwrap()["hookSpecificOutput"].get("permissionDecision").is_none(),
+            "감사 모드는 판정을 내리면 안 된다"
+        );
     }
 
     #[test]
@@ -340,7 +345,7 @@ mod tests {
             assert_eq!(specific["permissionDecision"], decision);
             let reason = specific["permissionDecisionReason"].as_str().unwrap();
             assert!(reason.contains("decide gate bash-risk") && reason.contains("deny 62%"), "{reason}");
-            assert!(output["systemMessage"].as_str().unwrap().contains(decision));
+            assert!(specific["additionalContext"].as_str().unwrap().contains(decision));
         }
     }
 
@@ -349,8 +354,8 @@ mod tests {
         let quiet = hook_output(&judged(Verdict::Allow, Mode::Enforce, Display::Decisions));
         assert!(quiet.is_none(), "판정 없음은 기본적으로 아무것도 내지 않는다");
         let shown = hook_output(&judged(Verdict::Allow, Mode::Enforce, Display::All)).unwrap();
-        assert!(shown.get("hookSpecificOutput").is_none());
-        assert!(shown["systemMessage"].as_str().unwrap().contains("allow"));
+        assert!(shown["hookSpecificOutput"].get("permissionDecision").is_none());
+        assert!(shown["hookSpecificOutput"]["additionalContext"].as_str().unwrap().contains("allow"));
     }
 
     #[test]
@@ -363,7 +368,7 @@ mod tests {
     #[test]
     fn display_off_hides_the_message_but_enforce_still_decides() {
         let output = hook_output(&judged(Verdict::Deny, Mode::Enforce, Display::Off)).unwrap();
-        assert!(output.get("systemMessage").is_none());
+        assert!(output["hookSpecificOutput"].get("additionalContext").is_none());
         assert_eq!(output["hookSpecificOutput"]["permissionDecision"], "deny");
         assert!(hook_output(&judged(Verdict::Deny, Mode::Audit, Display::Off)).is_none());
     }
@@ -384,8 +389,14 @@ mod tests {
         let mut outcome = judged(Verdict::Deny, Mode::Enforce, Display::Decisions);
         outcome.kind = Kind::Failed { reason: "데몬 응답 없음".into() };
         let output = hook_output(&outcome).unwrap();
-        assert_eq!(output["systemMessage"], "🛡 decide gate bash-risk: 판정 없이 통과 (데몬 응답 없음)");
-        assert!(output.get("hookSpecificOutput").is_none(), "실패하면 기본 권한 흐름을 그대로 둔다");
+        assert_eq!(
+            output["hookSpecificOutput"]["additionalContext"],
+            "🛡 decide gate bash-risk: 판정 없이 통과 (데몬 응답 없음)"
+        );
+        assert!(
+            output["hookSpecificOutput"].get("permissionDecision").is_none(),
+            "실패하면 기본 권한 흐름을 그대로 둔다"
+        );
         outcome.display = Display::Off;
         assert!(hook_output(&outcome).is_none());
     }
@@ -551,7 +562,10 @@ mod tests {
         let output = hook_output(&ruled(Verdict::Deny, Mode::Audit, Display::Decisions));
         let expected = "🛡 decide gate bash-risk: deny (감사 모드 — 막지 않음)\n• 근거: 정적 규칙 `*mkfs*` (모델 호출 없음)\n• 대상: sudo mkfs.ext4 /dev/sda";
         assert_eq!(message(&output), expected);
-        assert!(output.unwrap().get("hookSpecificOutput").is_none(), "감사 모드는 판정을 내리면 안 된다");
+        assert!(
+            output.unwrap()["hookSpecificOutput"].get("permissionDecision").is_none(),
+            "감사 모드는 판정을 내리면 안 된다"
+        );
     }
 
     #[test]
@@ -561,7 +575,7 @@ mod tests {
             assert_eq!(output["hookSpecificOutput"]["permissionDecision"], decision);
             let reason = output["hookSpecificOutput"]["permissionDecisionReason"].as_str().unwrap();
             assert!(reason.contains("정적 규칙 `*mkfs*`") && reason.contains(decision), "{reason}");
-            assert!(output["systemMessage"].as_str().unwrap().contains("enforce"), "{output}");
+            assert!(output["hookSpecificOutput"]["additionalContext"].as_str().unwrap().contains("enforce"), "{output}");
         }
     }
 
@@ -570,7 +584,7 @@ mod tests {
         assert!(hook_output(&ruled(Verdict::Deny, Mode::Audit, Display::Off)).is_none());
         let output = hook_output(&ruled(Verdict::Deny, Mode::Enforce, Display::Off)).unwrap();
         assert_eq!(output["hookSpecificOutput"]["permissionDecision"], "deny");
-        assert!(output.get("systemMessage").is_none(), "{output}");
+        assert!(output["hookSpecificOutput"].get("additionalContext").is_none(), "{output}");
     }
 
     #[test]

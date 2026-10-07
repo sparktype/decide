@@ -230,10 +230,10 @@ mod tests {
         let server = fake_daemon(&dir.join("d.sock"), DENY_ANSWER);
         let output = run_hook("bash-risk", &hook_input("rm -rf ~/Downloads/old", &dir), &ctx(&dir), &mut || {})
             .expect("deny 판정은 표시된다");
-        let message = output["systemMessage"].as_str().unwrap();
+        let message = output["hookSpecificOutput"]["additionalContext"].as_str().unwrap();
         assert!(message.contains("deny (감사 모드 — 막지 않음)"), "{message}");
         assert!(message.contains("rm -rf ~/Downloads/old"), "{message}");
-        assert!(output.get("hookSpecificOutput").is_none(), "감사 모드는 결정하지 않는다");
+        assert!(output["hookSpecificOutput"].get("permissionDecision").is_none(), "감사 모드는 결정하지 않는다");
         let request: Value = serde_json::from_str(server.join().unwrap().trim()).unwrap();
         assert_eq!(request["client_version"], "9.9.9");
         assert_eq!(request["type"], "choice");
@@ -296,9 +296,9 @@ mod tests {
         let mut spawned = 0;
         let output = run_hook("bash-risk", &hook_input("make deploy", &down), &ctx(&down), &mut || spawned += 1).unwrap();
         assert_eq!(spawned, 1, "꺼진 데몬은 새로 띄운다");
-        let message = output["systemMessage"].as_str().unwrap();
+        let message = output["hookSpecificOutput"]["additionalContext"].as_str().unwrap();
         assert!(message.contains("판정 없이 통과") && message.contains("시작"), "{message}");
-        assert!(output.get("hookSpecificOutput").is_none());
+        assert!(output["hookSpecificOutput"].get("permissionDecision").is_none());
         let log = audit_lines(&down);
         assert!(log[0]["failure"].as_str().unwrap().contains("시작"));
         assert_eq!(log[0]["verdict"], Value::Null);
@@ -311,7 +311,7 @@ mod tests {
         let _server = fake_daemon(&dir.join("d.sock"), r#"{"answer":{"type":"choice","probabilities":{"allow":1}}}"#);
         let mut spawned = 0;
         let output = run_hook("bash-risk", &hook_input("make deploy", &dir), &ctx(&dir), &mut || spawned += 1).unwrap();
-        assert!(output["systemMessage"].as_str().unwrap().contains("확률"), "{output}");
+        assert!(output["hookSpecificOutput"]["additionalContext"].as_str().unwrap().contains("확률"), "{output}");
         assert_eq!(spawned, 0);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -343,10 +343,10 @@ mod tests {
         let output = run_hook("bash-risk", &hook_input("sudo mkfs.ext4 /dev/sda", &dir), &ctx(&dir), &mut || spawned += 1)
             .expect("deny 규칙은 표시된다");
         assert_eq!(spawned, 0, "데몬을 띄우면 안 된다");
-        let message = output["systemMessage"].as_str().unwrap();
+        let message = output["hookSpecificOutput"]["additionalContext"].as_str().unwrap();
         assert!(message.contains("deny (감사 모드 — 막지 않음)"), "{message}");
         assert!(message.contains("정적 규칙 `*mkfs*` (모델 호출 없음)"), "{message}");
-        assert!(output.get("hookSpecificOutput").is_none(), "감사 모드는 결정하지 않는다");
+        assert!(output["hookSpecificOutput"].get("permissionDecision").is_none(), "감사 모드는 결정하지 않는다");
         let log = audit_lines(&dir);
         assert_eq!(log.len(), 1);
         assert_eq!(log[0]["verdict"], "deny");
@@ -379,7 +379,7 @@ mod tests {
         // `cat`은 사전 필터에 있어 규칙이 없으면 조용히 통과한다.
         let output = run_hook("bash-risk", &hook_input("cat ~/project/.env", &dir), &ctx(&dir), &mut || {})
             .expect("사전 필터가 아니라 ask 규칙이 먼저 적용된다");
-        assert!(output["systemMessage"].as_str().unwrap().contains("ask (감사 모드"), "{output}");
+        assert!(output["hookSpecificOutput"]["additionalContext"].as_str().unwrap().contains("ask (감사 모드"), "{output}");
         let log = audit_lines(&dir);
         assert_eq!(log[0]["prefiltered"], false);
         assert_eq!(log[0]["rule"], "*.env");
@@ -394,7 +394,7 @@ mod tests {
             r#"{"gates": {"bash-risk": {"deny_patterns": ["*mkfs*"], "ask_patterns": ["*mkfs*"]}}}"#,
         );
         let output = run_hook("bash-risk", &hook_input("mkfs.ext4 /dev/sdb", &dir), &ctx(&dir), &mut || {}).unwrap();
-        assert!(output["systemMessage"].as_str().unwrap().contains("deny (감사 모드"), "{output}");
+        assert!(output["hookSpecificOutput"]["additionalContext"].as_str().unwrap().contains("deny (감사 모드"), "{output}");
         assert_eq!(audit_lines(&dir)[0]["verdict"], "deny");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -406,7 +406,7 @@ mod tests {
         let server = fake_daemon(&dir.join("d.sock"), DENY_ANSWER);
         let output = run_hook("bash-risk", &hook_input("rm -rf ~/x", &dir), &ctx(&dir), &mut || {}).unwrap();
         server.join().unwrap();
-        assert!(output["systemMessage"].as_str().unwrap().contains("deny (감사 모드"), "{output}");
+        assert!(output["hookSpecificOutput"]["additionalContext"].as_str().unwrap().contains("deny (감사 모드"), "{output}");
         let log = audit_lines(&dir);
         assert_eq!(log[0]["rule"], Value::Null, "규칙이 아니라 모델 판정이다");
         assert_eq!(log[0]["backend"], "local");
@@ -419,7 +419,7 @@ mod tests {
         write_config(&dir.join(".config/decide/gates.json"), r#"{"mode": "sometimes"}"#);
         let _server = fake_daemon(&dir.join("d.sock"), DENY_ANSWER);
         let output = run_hook("bash-risk", &hook_input("rm -rf ~/x", &dir), &ctx(&dir), &mut || {}).unwrap();
-        assert!(output["systemMessage"].as_str().unwrap().contains("설정 경고 1건"), "{output}");
+        assert!(output["hookSpecificOutput"]["additionalContext"].as_str().unwrap().contains("설정 경고 1건"), "{output}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
