@@ -35,8 +35,8 @@
 
 ## 릴리스 때 할 일 (이번 변경에 넣지 않았다)
 
-- [ ] v0.8.0 태그를 푸시해 릴리스 자산을 만든다
-- [ ] `packaging/homebrew/decide.rb`와 tap의 formula를 0.8.0 url·sha256으로 바꾸고 `mlx.metallib` 설치·검사를 뺀다
+- [x] v0.8.0 태그를 푸시해 릴리스 자산을 만든다(CI 성공, 자산 2개)
+- [x] `packaging/homebrew/decide.rb`와 tap의 formula를 0.8.0 url·sha256으로 바꾸고 `mlx.metallib` 설치·검사를 뺀다
 - [ ] 실행 중인 옛 데몬(0.7.0)을 `pkill -f "decide daemon"`으로 끄고 `/mcp`로 다시 연결한다
 - [ ] 모드(`sparktype/claude-plugins`의 decide)가 읽는 `CLEF_WEIGHTS`·`DECIDE_LOCAL_REPO`와 백엔드 박스의 가중치 표시를 `DECIDE_LOCAL_URL` 기준으로 바꾼다
 

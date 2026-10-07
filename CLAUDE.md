@@ -39,10 +39,8 @@ brew install sparktype/tap/decide
 ```
 
 The published formula is `Formula/decide.rb` in `sparktype/homebrew-tap`. This repo's
-`packaging/homebrew/decide.rb` records the same install. Version is 0.8.0 in `Cargo.toml`; the
-formula file still names the 0.7.0 release (url, sha256, and the `mlx.metallib` it installs) until the
-0.8.0 release asset exists, and must then drop `mlx.metallib`, because from 0.8.0 the release tarball
-holds only `decide`. GitHub Actions builds `crates/decide` and uploads a release asset when a `v*`
+`packaging/homebrew/decide.rb` records the same install. Version is 0.8.0; the release tarball holds
+only `decide` (no `mlx.metallib` since the in-process model was removed). GitHub Actions builds `crates/decide` and uploads a release asset when a `v*`
 tag is pushed; the formula downloads that prebuilt arm64 binary and installs it, no Rust toolchain
 required at install time. The API key stays in the environment as `TYPESAFE_API_KEY`.
 `.mcp.json` points `decide` at the stdio command `/opt/homebrew/bin/decide mcp`, which Claude Code
