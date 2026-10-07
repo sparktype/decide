@@ -44,7 +44,7 @@ Claude Code에서 로컬로 고정하려면 `~/.claude/settings.json`에 `env`�
 
 `DECIDE_BACKEND`는 `TYPESAFE_API_KEY`보다 우선한다. 이미 떠 있는 프로세스는 옛 환경을 쥐고 있으니, 바꾼 뒤에는 `/mcp`에서 `decide`를 다시 연결하고 데몬은 `pkill -f "decide daemon"`으로 한 번 끈다(다음 호출이 새로 띄운다).
 
-**Kev를 쓴다.** 응답 속도가 우선이거나 인터넷이 없는 환경이면 로컬 Kev 서버를 TypeSafe 백엔드의 주소로 지정한다. `~/.config/decide/config.toml`에 `backend = "typesafe"`와 `[typesafe]`의 `api_key = "local"`, `url = "http://127.0.0.1:8009/v1/systemone"`을 넣으면 된다. 서버 실행, 확인, 오프라인 반입은 [Kev로 decide 돌리기](docs/kev-setup.md)에 있다. `decide` 0.7.0 이상이어야 하고, Kev 서버는 `decide`가 띄워 주지 않는다.
+**Kev를 쓴다.** 응답 속도가 우선이거나 인터넷이 없는 환경이면 로컬 Kev 서버를 TypeSafe 백엔드의 주소로 지정한다. `~/.config/decide/config.toml`에 `backend = "typesafe"`와 `[typesafe]`의 `api_key = "local"`, `url = "http://127.0.0.1:8009/v1/systemone"`을 넣으면 된다. 서버 실행, 확인, 오프라인 반입과 검증한 호환 모델 목록은 [Kev로 decide 돌리기](docs/kev-setup.md)에 있다. `decide` 0.7.0 이상이어야 하고, Kev 서버는 `decide`가 띄워 주지 않는다.
 
 **제대로 붙었는지 본다.** 아무 판단이나 한 번 부르고 결과의 `routing.backend`가 원하는 값(`local` 또는 `typesafe`)인지 확인한다. 게이트는 `decide gate --show`로 설정을 볼 수 있다.
 
