@@ -1,9 +1,9 @@
 class Decide < Formula
   desc "Choice, score, and noul decisions via TypeSafe Jev or a local model"
   homepage "https://github.com/sparktype/decide"
-  url "https://github.com/sparktype/decide/releases/download/v0.6.0/decide-v0.6.0-aarch64-apple-darwin.tar.gz"
-  sha256 "fce59a3a6588dd79244a492202ddc9524d1572b1fa26c266ddf2d8c56a52e2de"
-  version "0.6.0"
+  url "https://github.com/sparktype/decide/releases/download/v0.7.0/decide-v0.7.0-aarch64-apple-darwin.tar.gz"
+  sha256 "0f7be3658ff96367f93aa5cc3f04df173fc39388d4b3a7e64a3c82c8da6eef8a"
+  version "0.7.0"
 
   depends_on arch: :arm64
   depends_on macos: :sonoma
