@@ -62,3 +62,7 @@
 
 ## 2026-10-07 구역마다 박스
 - 바깥 상자 하나를 없애고 backend, gate, decision path, latency를 각각 둥근 테두리 상자로 나눴다. backend 상자는 머리줄 오른쪽에 `daemon ●`(초록)/`○ down`(빨강)을 두고, 백엔드와 출처, 엔드포인트와 출처를 한 줄씩 보인다. 모든 상자는 같은 폭(`width + 4`)이다.
+
+## 2026-10-07 플러그인 이름을 decide로
+- 토스트 박스 제목은 엔진이 플러그인 이름으로 붙이므로(`$.ui.toast`는 `timeoutMs`만 받는다) 제목을 바꾸려면 플러그인 이름을 `decide-view`에서 `decide`로 바꿔야 한다. 폴더(`~/.claude/dev-mods/<세션id>/decide/`), `plugin.json`의 `name`, 상태 키(`atom`의 `plugin`, 타입 계약)를 함께 바꿨다. 이 문서의 앞부분 `decide-view`는 이전 이름이다.
+- 토스트 박스 색은 엔진이 그리고 `ToastOptions`에 색이 없어 모드에서 바꿀 수 없다. 패널 박스의 `borderColor`(현재 `subtle`)는 모드가 정한다.
