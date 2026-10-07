@@ -96,3 +96,6 @@
 
 ## 2026-10-07 backend 박스 본문을 한 줄로
 - backend 박스 본문을 `typesafe (https://api.typesafe.ai/v1/systemone)` 한 줄로 줄였다(이모지 `🌐`/`🧠`와 출처 괄호 `(env)`, `(default)` 삭제). 출처(환경변수, config.toml, 기본값) 정보는 화면에서 사라졌으므로, 값이 어디서 왔는지는 이 문서의 `resolveRoute` 우선순위로만 알 수 있다. `Route`의 `backendSource`, `targetSource`는 계산만 하고 쓰지 않는다.
+
+## 2026-10-07 박스 제목 단순화
+- 박스 제목을 `• Gate`, `• Type`, `• Latency`로 줄였다(이전 `Decide gate`, `Decision path`, `Latency · <backend>`). 지연 박스에서 백엔드 이름을 뺐지만 값은 여전히 선택된 백엔드 기준이고, 백엔드는 맨 위 `• Backend` 박스가 보인다.
