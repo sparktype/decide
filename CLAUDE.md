@@ -9,7 +9,11 @@ The installed program is the Rust binary `/opt/homebrew/bin/decide`. One process
 backends. `DECIDE_BACKEND=typesafe|local` selects one. When that variable is unset, a
 non-empty `TYPESAFE_API_KEY` selects TypeSafe Jev and an absent key selects local.
 A failed call stays on its backend. The two backends are not calibrated to each
-other. Both answer `noul` with only `type` and `noul`.
+other. Both answer `noul` with only `type` and `noul`. The TypeSafe backend can be pointed at any
+server that speaks the same System One format (`DECIDE_TYPESAFE_URL` or config.toml
+`[typesafe].url`), which is how a local Kev server (`kev.serve`, MLX, Apple Silicon) is used as a
+fast offline model; setup and measurements are in `docs/kev-setup.md`. Such a server still reports
+`routing.backend: "typesafe"` and `routing.model: "jev-latest"`, and it is not started by `decide`.
 
 The local backend runs real in-process inference — no server, no network call per
 request. It runs the Clef-flash backbone (Qwen3.5-9B hybrid attention) on the Apple Silicon GPU
@@ -28,7 +32,7 @@ as history; that engine has since been removed).
 
 Measured on an M1 Max (64GB): `cargo test --features parity` agrees with the BF16 oracle on 5/5 golden
 cases (max raw-logit diff 0.095, including an 11-option choice question whose top-2 options differ by only
-about 0.02 probability), and a warm call takes about 0.6s for ~150 tokens and 2.8s for ~900 tokens. The
+about 0.02 probability), and a warm call takes about 0.5s for ~150 tokens and 2.3s for ~860 tokens (92-94% backbone, head 30-120ms). The
 removed candle CPU path took 30s and 125s for the same inputs and agreed on 4/5. Prefill is compute-bound at
 roughly 3.6ms/token, so expect little more from kernel work on this chip. The gated-delta kernel is checked
 against an ops-based reference in a unit test.
