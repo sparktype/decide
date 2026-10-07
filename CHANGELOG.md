@@ -13,7 +13,7 @@
 - 로컬 서버가 꺼져 있으면 `scripts/serve-local.sh`를 안내하는 오류로 끝나고 다른 백엔드로 넘어가지 않는다.
 - choice 255개·score 10등급 한도 검사는 TypeSafe에서만 호출 전에 한다. 로컬은 서버가 판단한다.
 - `decide_many`는 로컬에서도 질문 전체를 한 번의 요청으로 보낸다.
-- `decide install`이 MCP를 stdio(`claude mcp add -s user decide -- /opt/homebrew/bin/decide mcp`)로 등록하고 데몬을 띄우지 않는다. 이미 등록돼 있으면 그대로 두고 옮기는 방법을 알려 준다. 저장소 `.mcp.json`도 stdio로 바꿨다. 데몬의 HTTP 엔드포인트는 남아 있다.
+- `decide install`이 MCP를 stdio(`claude mcp add -s user decide -- /opt/homebrew/bin/decide mcp`)로 등록하고 데몬을 띄우지 않는다. 이미 등록돼 있으면 그대로 두고 옮기는 방법을 알려 준다. 저장소 `.mcp.json`도 stdio로 바꿨다. 데몬은 게이트용 Unix 소켓만 서빙한다.
 - 릴리스 압축 파일에는 `decide`만 들어간다(`mlx.metallib` 없음). 릴리스 워크플로에서 Xcode 선택, Metal
   툴체인, cmake 단계를 뺐다.
 
@@ -24,6 +24,7 @@
 
 ### 삭제
 
+- 데몬의 HTTP MCP 서버(`http.rs`, `tiny_http`, `127.0.0.1:48080/mcp`)와 `decide daemon`의 HTTP 포트 검사. MCP는 stdio(`decide mcp`)뿐이다. 이전에 HTTP로 등록한 클라이언트는 연결이 끊기므로 `claude mcp remove -s user decide` 뒤 `decide install`로 옮긴다. 부수 효과로 `tests/daemon.rs`가 실제 데몬과 포트를 다투지 않는다.
 - in-process Clef-flash 추론(`mlx-rs`, candle, `local/`), 가중치 다운로드, 데몬의 모델 선로딩,
   `CLEF_WEIGHTS`, `DECIDE_LOCAL_REPO`, `DECIDE_LOCAL_TIMING`, `[local].weights`·`repo`·`hf_*`, `parity` 기능,
   `tests/parity.rs`, `scripts/clef_flash_oracle.py`. 옛 설정 키는 남아 있어도 무시한다.

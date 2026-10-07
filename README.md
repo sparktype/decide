@@ -137,7 +137,7 @@ decide_many(
 
 ### 상주 데몬
 
-`decide daemon`은 한 프로세스에서 두 트랜스포트를 함께 서빙한다 — 게이트 훅용 Unix 소켓(`~/.cache/decide/decide.sock`)과 MCP용 로컬 HTTP(`http://127.0.0.1:48080/mcp`). MCP는 0.8.0부터 stdio(`decide mcp`)로 등록하므로 이 HTTP 엔드포인트는 직접 쓰고 싶을 때의 선택지다. 백엔드 호출은 `decide`가 직접 하지 않고 서버로 보내므로 데몬에 모델은 올라가지 않는다. 둘 다 30분 동안 요청이 없으면 끝난다. 게이트 요청(`state`, `type`, `instructions`, `options`, `criteria`, 백엔드가 모두 같음)은 최대 64개까지 캐시하며, 캐시된 답은 `routing.cached: true`, `latency_ms: 0`이다. 훅은 데몬이 꺼져 있으면 띄워 두고, `decide install`도 설치 시점에 한 번 띄운다 — 재부팅 뒤에는 자동으로 뜨지 않으니 수동으로 `decide daemon &`을 실행한다. 클라이언트의 버전이 데몬과 다르면(UDS 쪽만) 데몬이 스스로 끝나 새로 뜨므로 업그레이드 뒤 옛 데몬이 남지 않는다. stdio MCP 서버(`decide mcp`)는 Claude Code가 세션마다 띄우는 별도 프로세스라 데몬과 캐시를 공유하지 않는다.
+`decide daemon`은 게이트 훅용 Unix 소켓(`~/.cache/decide/decide.sock`)만 서빙한다. MCP는 stdio(`decide mcp`)라 데몬을 거치지 않는다(0.7.0까지 있던 HTTP 엔드포인트 `127.0.0.1:48080`은 0.8.0에서 지웠다). 백엔드 호출은 `decide`가 직접 하지 않고 서버로 보내므로 데몬에 모델은 올라가지 않는다. 30분 동안 요청이 없으면 끝난다. 게이트 요청(`state`, `type`, `instructions`, `options`, `criteria`, 백엔드가 모두 같음)은 최대 64개까지 캐시하며, 캐시된 답은 `routing.cached: true`, `latency_ms: 0`이다. 훅이 데몬이 꺼져 있으면 스스로 띄우므로 재부팅 뒤에도 따로 실행할 필요가 없다. 클라이언트의 버전이 데몬과 다르면데몬이 스스로 끝나 새로 뜨므로 업그레이드 뒤 옛 데몬이 남지 않는다. stdio MCP 서버(`decide mcp`)는 Claude Code가 세션마다 띄우는 별도 프로세스라 데몬과 캐시를 공유하지 않는다.
 
 ## 결과를 눈으로 보기 (`decide hook`)
 
@@ -266,7 +266,7 @@ decide_many(
 | 명령 | 하는 일 |
 | --- | --- |
 | `decide mcp` | stdio MCP 서버를 실행한다. `decide install`이 등록하는 명령이다. |
-| `decide daemon` | UDS(게이트)와 HTTP(MCP, `127.0.0.1:48080`)를 함께 서빙하는 상주 데몬을 실행한다. |
+| `decide daemon` | 게이트 훅용 Unix 소켓을 서빙하는 상주 데몬을 실행한다. |
 | `decide install [--claude]` | Claude Code에 MCP를 stdio로 등록한다. `--claude`는 표시 훅과 게이트 훅도 넣는다. |
 | `decide hook` | `PostToolUse` 훅. `decide` 결과를 한 줄로 보여 준다. |
 | `decide gate <이름>` / `--show` / `stats` | `PreToolUse` 훅. Bash 명령을 판정하거나, 게이트 설정을 보여 주거나, 감사 로그를 집계한다. |
@@ -295,7 +295,7 @@ url = "http://127.0.0.1:8009/v1/systemone"   # DECIDE_LOCAL_URL과 같은 뜻(�
 
 ## 개발
 
-런타임은 `crates/decide`다. 기본 테스트는 모델 서버와 네트워크 없이 돈다. 데몬 통합 테스트(`tests/daemon.rs`)는 48080 포트를 쓰므로 실제 `decide daemon`이 떠 있으면 실패한다.
+런타임은 `crates/decide`다. 기본 테스트는 모델 서버와 네트워크 없이 돈다.
 
 ```bash
 cargo test --manifest-path crates/decide/Cargo.toml

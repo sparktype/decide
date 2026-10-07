@@ -47,3 +47,10 @@
 - [x] `.mcp.json`, `tests/project_config.rs`, `tests/install_claude.rs`, 도움말
 - [x] 임시 설정 폴더에서 `claude mcp add` 후 `✔ Connected`
 - [ ] 릴리스 뒤 실제 등록을 옮긴다: `claude mcp remove -s user decide && decide install`
+
+## 추가: 데몬의 HTTP 서버 삭제 (2026-10-07)
+
+- [x] `serve_*` 테스트를 UDS 전용(`serve`)으로 먼저 바꾸고 구현
+- [x] `http.rs`, `tiny_http`, `DEFAULT_HTTP_ADDR` 삭제
+- [x] 전체 `cargo test` 통과(`tests/daemon.rs` 포함)
+- [x] README, CLAUDE.md, CHANGELOG, kev-setup, 데몬 도움말 갱신

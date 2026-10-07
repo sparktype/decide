@@ -52,9 +52,9 @@ starts per session (about 5ms, no model to load), so no daemon is needed for MCP
 (for example the 0.7.0 HTTP one) is left alone with a hint to `claude mcp remove -s user decide`
 first. The daemon is only for the gate hook, which starts it when the socket is down; it does not
 survive a reboot and needs no manual start. Measured transport cost (`tools/list`, M1 Max): stdio
-0.05ms per message, HTTP to the daemon 0.4ms, against backend calls of 100ms and up.
+0.05ms per message, the daemon HTTP transport (since removed) 0.4ms, against backend calls of 100ms and up.
 
-Runtime tests, no model server and no network (`tests/daemon.rs` binds :48080, so it fails while a real `decide daemon` is running):
+Runtime tests, no model server and no network:
 
 ```bash
 cargo test --manifest-path crates/decide/Cargo.toml
@@ -72,8 +72,7 @@ Daemon socket `~/.cache/decide/decide.sock`, 30 minutes idle:
 /opt/homebrew/bin/decide daemon
 ```
 
-`decide mcp` is the stdio MCP server that `decide install` registers (the daemon's HTTP transport
-below stays available but nothing registers it). The command
+`decide mcp` is the stdio MCP server that `decide install` registers; it is the only MCP transport. The command
 line follows the usual conventions (`src/help.rs`
 owns every help text and keeps the command list in one place): `-h`/`--help` or no arguments print the
 overview, `<command> --help` and `help <command>` print that command's help, `-V`/`--version` print
@@ -111,27 +110,15 @@ or `.claude/settings.json`, restart Claude Code.
   preload.
 - `mcp.rs` speaks newline-delimited JSON-RPC. Tool failures are `isError` results. It
   is transport-agnostic (`handle_message(&Value, &Env, &mut T) -> Option<Value>`) and
-  is reused as-is by both the stdio loop (`main.rs::run_mcp`) and `http.rs`'s HTTP handler.
-- `http.rs` is the MCP HTTP transport: `handle_http_body` parses one JSON-RPC message
-  from a request body and feeds it to `mcp::handle_message`, returning `(status, body)`;
-  JSON parse errors and JSON-RPC-level errors go in the response body (code `-32700`
-  etc.), never the HTTP status. `serve_http`/`http_port_in_use` wrap this in a
-  `tiny_http` server bound to a fixed local address, handling only `POST /mcp` (anything
-  else is a 404) — no SSE, one request in and one JSON-RPC result out.
-- `daemon.rs` serves one JSON line per UDS connection, same as before, and now also runs
-  an HTTP server on the same process via `serve_unified` (`DEFAULT_HTTP_ADDR =
-  "127.0.0.1:48080"`): both transports run on their own thread, share one
-  `Arc<Mutex<Cache>>` (though in practice only the UDS/gate path uses the cache — MCP
-  requests never did) and one `Arc<Mutex<Instant>>` idle timer, so either transport's
-  traffic resets the shared 30-minute idle deadline and the daemon only exits once both
-  go quiet. `serve_unified` claims the UDS socket first (`claim_socket`) and only then
-  checks the HTTP port (`http_port_in_use`); if either is already taken, the process
-  exits without starting (and un-claims the UDS socket on an HTTP-port conflict). A live
-  socket is left in place; a dead socket file is replaced. Idle exit uses `poll` (UDS
-  side) or `recv_timeout` (HTTP side). The LRU (`MAX_CACHE_ENTRIES` = 64, keyed on the
+  is used by the stdio loop (`main.rs::run_mcp`), the only MCP transport. The daemon's HTTP
+  server (`http.rs`, `tiny_http`, :48080) was removed in 0.8.0.
+- `daemon.rs` serves one JSON line per UDS connection for the gate hook (`serve`, claims the socket
+  first with `claim_socket`). A live socket is left in place and the second daemon backs off; a dead
+  socket file is replaced. It exits after 30 idle minutes (`poll` on the listener). The LRU
+  (`MAX_CACHE_ENTRIES` = 64, keyed on the
   parsed request plus the resolved backend) makes identical gate requests within one
   daemon lifetime skip the transport; cached answers carry `routing.cached: true` and
-  `latency_ms: 0.0`. `decide mcp` (stdio) is a fresh process per call and has no cache.
+  `latency_ms: 0.0`. `decide mcp` (stdio) is a separate process per Claude Code session and has no cache.
   A request may carry `client_version`; when it differs from `daemon::VERSION` the
   daemon skips the backend, answers `{"stale":true,"version":…}`, and exits (UDS path
   only), so an upgraded client never keeps talking to an old daemon (`handle_request`

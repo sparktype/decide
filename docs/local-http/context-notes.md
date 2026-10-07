@@ -43,3 +43,14 @@
 - 도구 이름은 그대로 `mcp__decide__decide`라서 표시 훅과 모드의 매처는 바뀌지 않는다.
 - 확인: 임시 `CLAUDE_CONFIG_DIR`에서 같은 인자로 `claude mcp add` 후 `claude mcp list`가 `✔ Connected`(stdio)를 보였다. 사용자 실제 설정은 건드리지 않았다.
 - 실제 사용 중인 등록(HTTP)은 일부러 옮기지 않았다. 0.8.0이 설치돼야 `/opt/homebrew/bin/decide`가 새 동작을 가진다.
+
+## 2026-10-07 데몬의 HTTP 서버 삭제
+
+- 요청: `decide mcp`도 http에서 stdio로. 남은 HTTP는 데몬의 MCP 엔드포인트와 사용자 설정의 옛 HTTP 등록이라 둘 중 무엇인지 물었고,
+  데몬의 HTTP 서버 코드 삭제로 정했다. 실제 등록(HTTP)은 옮기지 않았다.
+- 지운 것: `http.rs`, `tiny_http` 의존성, `DEFAULT_HTTP_ADDR`, `serve_unified`의 HTTP 스레드·포트 검사. `daemon::serve(uds_path, idle)`가 UDS만
+  서빙한다. 이미 데몬이 있으면 두 번째는 소켓을 지우지 않고 물러난다(테스트로 고정).
+- 부수 효과: `tests/daemon.rs`가 :48080을 잡던 실제 데몬과 부딪혀 실패하던 문제가 사라졌다. 전체 테스트가 처음으로 전부 통과한다.
+- 지난 변경 때 놓친 낡은 문구도 고쳤다. 데몬 도움말의 "모델은 첫 요청에서 읽는다"(in-process 삭제 때 남음), README의 "`decide install`이 설치 시점에
+  데몬을 한 번 띄운다"(stdio 전환 때 남음).
+- 영향: 0.7.0 데몬(:48080)에 HTTP로 붙어 있던 클라이언트는 0.8.0 이후 연결 실패다. 옮기는 방법은 CHANGELOG와 `decide install`의 안내에 있다.
