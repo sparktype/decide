@@ -1,0 +1,30 @@
+# 결정 기록: local 백엔드를 별도 서버 호출로
+
+## 2026-10-07 시작
+
+- 요청: 백엔드는 typesafe와 local로 나누고, 백엔드는 별도로 띄운다. decide는 모델 서빙을 하지 않는다.
+  최적의 성능을 내는 방법으로 하고, 서빙은 스크립트로 쓴다.
+- 확인한 두 가지: 서버 모델은 Kev-4B, 기존 in-process 추론은 삭제하고 HTTP 호출로 교체.
+- 선례: 0.0.4가 `jev-style serve`를 `DECIDE_LOCAL_URL`로 부르는 같은 모양이었다(CHANGELOG). 그 뒤 in-process MLX로
+  갔다가 이번에 서버 호출로 돌아온다. 이유는 모델 서빙을 decide 밖으로 빼는 것이다.
+- 작업은 다른 세션과 체크아웃을 공유하므로 worktree `../decide-local-http`, 브랜치 `feat/local-http`에서 한다.
+- Kev 저장소 현재 `main`이 `5e42a7a`로, `docs/kev-setup.md`에서 검증한 커밋과 같다. 스크립트가 이 커밋을 고정한다.
+
+## 2026-10-07 구현 중 결정과 발견
+
+- 주소·인증: local은 `LiveTransport::local(url)`로 `Authorization` 없이 보낸다. `live_transport(env)`가 백엔드를 보고 주소를 고른다
+  (`pick_local_url`: `DECIDE_LOCAL_URL` > `[local].url` > 기본값). 서버 인증 키(`KEV_API_KEY`)는 YAGNI라 넣지 않았다.
+- `routing.model`은 서버가 돌려준 값이다. Kev는 요청의 별칭 `jev-latest`를 그대로 돌려줘서 `local · jev-latest`로 보인다. 틀리진 않지만
+  모델 이름은 아니다. 고치려면 `[local].model` 같은 표시용 값이 필요한데 이번에는 하지 않았다.
+- 한도 검사(255 옵션, 10 등급)는 typesafe에서만 한다. 0.0.4의 결정과 같다.
+- 연결 실패에만 `scripts/serve-local.sh` 안내를 붙인다. HTTP 오류(예: Kev의 422)는 서버 메시지가 더 정확해서 그대로 둔다.
+- 웜업: 첫 시도에서 스크립트가 서버를 내렸다. 웜업의 choice 요청이 `options`를 썼는데 decide는 `criteria`를 보내고 서버가 422로 거절했고,
+  `curl -f`와 `set -e`가 스크립트를 끝내 trap이 서버를 죽였다. 요청 모양을 decide와 같게 고치고, 웜업 실패는 경고만 하고 서버는 두게 했다.
+  실제 decide 요청 모양을 스크립트가 따라야 한다는 교훈이다.
+- 측정(M1 Max, 같은 입력): 첫 호출 474ms, 같은 state 재호출 98ms. 이전 in-process Clef-flash는 같은 종류 입력에서 수 초였다.
+- 버그가 아닌 환경 문제: `tests/daemon.rs`는 :48080을 직접 바인딩해서 실제 데몬이 떠 있으면 실패한다. 변경 전에도 같았다. 데몬 포트를
+  환경변수로 바꿀 수 있게 하는 것은 이번 범위가 아니다.
+- CHANGELOG의 맨 위 항목이 0.0.6인데 Cargo 버전은 0.7.0이었다(변경 기록이 뒤처져 있다). 0.8.0 항목을 위에 추가했지만 0.0.7~0.7.0 사이는
+  비어 있다.
+- 포뮬러 `packaging/homebrew/decide.rb`는 일부러 안 바꿨다. 새 릴리스 자산의 url·sha256이 없으면 0.7.0 꾸러미(metallib 포함)를 `decide`만
+  설치하게 되어 깨진다. 릴리스 때 함께 바꾼다(체크리스트).

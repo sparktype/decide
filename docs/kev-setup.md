@@ -1,10 +1,10 @@
 # Kev로 decide 돌리기
 
-Kev는 Qwen3.5 위에 얹은 작은 판단 모델 묶음이다(`jaredpalmer/kev-*`, Apache-2.0). TypeSafe의 System One API(`POST /v1/systemone`)와 같은 형식을 말하는 로컬 서버(`kev.serve`)로 띄운다. `decide`는 TypeSafe 백엔드의 주소만 이 서버로 바꾸면 되므로 코드를 바꿀 필요가 없다. 인터넷이 없는 사무실에서 쓰는 것이 주된 용도다.
+Kev는 Qwen3.5 위에 얹은 작은 판단 모델 묶음이다(`jaredpalmer/kev-*`, Apache-2.0). TypeSafe의 System One API(`POST /v1/systemone`)와 같은 형식을 말하는 로컬 서버(`kev.serve`)로 띄운다. `decide` 0.8.0부터 이 서버가 `local` 백엔드가 부르는 대상이다. `decide`는 모델을 서빙하지 않고 이 서버를 HTTP로 부르기만 하며, 서버는 `scripts/serve-local.sh`가 띄운다. 인터넷이 없는 사무실에서 쓰는 것이 주된 용도다.
 
 ## 언제 쓰나
 
-같은 입력으로 이 저장소의 로컬 백엔드(Clef-flash 8비트)와 Kev-4B를 나란히 잰 결과다(M1 Max 64GB, 정상 상태, 새 state).
+같은 입력으로 0.7.0까지 있던 in-process Clef-flash 8비트와 Kev-4B를 나란히 잰 결과다(M1 Max 64GB, 정상 상태, 새 state). Clef-flash 경로는 0.8.0에서 지웠으므로 이 표는 전환의 근거로만 남긴다.
 
 | 입력 | Clef-flash 8비트 | Kev-4B | 배수 |
 | --- | --- | --- | --- |
@@ -24,7 +24,7 @@ Kev는 Qwen3.5 위에 얹은 작은 판단 모델 묶음이다(`jaredpalmer/kev-
 
 "검증됨"은 이 저장소에서 `decide`로 직접 돌려 본 것이고, "미검증"은 문서나 모델 카드로만 아는 것이다. 이 표에 없는 모델은 호환 여부를 모른다.
 
-### Kev 서버로 쓰는 모델 (TypeSafe 백엔드의 `url`)
+### Kev 서버로 쓰는 모델 (`KEV_MODEL`)
 
 | 허깅페이스 ID | 베이스 | 상태 | 확인한 내용 |
 | --- | --- | --- | --- |
@@ -37,18 +37,9 @@ Kev는 Qwen3.5 위에 얹은 작은 판단 모델 묶음이다(`jaredpalmer/kev-
 
 서버가 `decide`와 호환되려면 `POST /v1/systemone`이 TypeSafe와 같은 요청·응답 형식을 말해야 한다. `decide`는 `model: "jev-latest"`를 보내고(Kev가 이 별칭을 받는다), 응답의 `answers`를 질문 id로 읽는다. Kev가 아닌 서버는 이 점을 직접 확인해야 하며, 이 저장소에서는 Kev 외의 서버를 시험하지 않았다.
 
-### 로컬 백엔드로 쓰는 모델 (`DECIDE_LOCAL_REPO` / `[local].repo` / `CLEF_WEIGHTS`)
+### 0.7.0까지의 in-process 로컬 백엔드 (삭제됨)
 
-로컬 백엔드는 Clef-flash 구조(Qwen3.5-9B 하이브리드 백본 + `joint_head.safetensors`)만 읽는다. 저장소(또는 `CLEF_WEIGHTS` 디렉터리)에 `config.json`, `model.safetensors.index.json`, 샤드, `joint_head.safetensors`가 있어야 하고, 양자화는 한 가지 비트 수의 affine(group 64)이어야 한다.
-
-| 허깅페이스 ID | 상태 | 확인한 내용 |
-| --- | --- | --- |
-| `mlx-community/clef-flash-8bit` | **검증됨(기본)** | parity 5/5 일치, 로짓 최대 차이 0.095. 웜 지연 150토큰 0.5초, 860토큰 2.3초(M1 Max). 약 10.7GB. |
-| `mlx-community/clef-flash-4bit` | **검증됨** | 로딩 정상, parity 판단 5/5 일치지만 로짓 최대 차이 1.157로 커진다. 속도는 8비트와 같고 디스크는 약 6GB. `decide_many` 접두 재사용도 동작한다. |
-| `mlx-community/clef-4bit`, `clef-8bit` (Clef 27B) | 미검증 | 백본은 설정 파일 기반이라 로딩될 가능성이 있으나 `joint_head` 차원이 다를 수 있다. 4비트 약 15GB, 8비트 약 28GB라 32GB Mac에는 4비트만 맞다. |
-| `TrevorJS/clef-flash-mlx-4bit`, `-8bit`, `aufklarer/Clef-flash-9B-MLX-4bit` 등 | 미검증 | 샤드 구성과 `joint_head` 유무를 확인하지 않았다. |
-
-토크나이저는 어느 쪽이든 `Cloudflare/clef-flash`의 `tokenizer.json`을 HF 캐시에서 읽는다.
+`mlx-community/clef-flash-8bit`(기본), `clef-flash-4bit` 등 Clef-flash 구조를 `CLEF_WEIGHTS`/`DECIDE_LOCAL_REPO`/`[local].repo`로 읽던 경로는 0.8.0에서 지웠다. 그 검증 기록(parity 5/5, 웜 지연 150토큰 0.5초·860토큰 2.3초)은 `docs/mlx-backend/`에 남아 있다. Clef-flash가 다시 필요하면 같은 System One 형식의 서버로 따로 띄워 `[local].url`로 가리키면 된다(이 저장소는 그 서버를 제공하지 않는다).
 
 ### 시험하지 않은 후보
 
@@ -56,21 +47,26 @@ Von(`wfzyx/von-1.0`), Laya, Nimble, NeoHorse-Jev-4B, `autotrust/JEV-*`는 조사
 
 ## 설정 절차
 
-### 1. Kev 서버를 띄운다
+### 1. 서버를 띄운다
 
 Apple Silicon Mac에서는 MLX를 자동으로 쓴다. [`uv`](https://docs.astral.sh/uv/)가 필요하다.
 
 ```bash
-git clone https://github.com/jaredpalmer/kev.git
-cd kev
-uv sync --extra serve
-uv run --extra serve python -m kev.serve --run jaredpalmer/kev-4b --port 8009
+scripts/serve-local.sh
 ```
 
+스크립트가 하는 일은 다음과 같다.
+
+- kev 저장소를 `~/.cache/decide/kev`에 받고 `KEV_REF`(기본 `5e42a7a`, 위에서 검증한 커밋)로 고정한다.
+- `uv sync --extra serve` 뒤 `kev.serve --run $KEV_MODEL --host 127.0.0.1 --port $DECIDE_LOCAL_PORT`를 띄운다.
+- `/v1/models`가 답할 때까지 기다린 뒤 noul과 choice 웜업 요청을 한 번씩 보낸다(Metal 커널 컴파일과 첫 호출 비용을 첫 실제 요청이 떠안지 않게).
+- 포그라운드로 남고 Ctrl-C로 서버를 끈다. 이미 그 주소에서 서버가 돌고 있으면 아무것도 하지 않고 끝난다.
+
+환경변수는 `KEV_MODEL`(기본 `jaredpalmer/kev-4b`, 다른 크기는 위 표), `DECIDE_LOCAL_PORT`(기본 8009), `KEV_REF`, `KEV_DIR`다.
+
 - 첫 실행은 어댑터와 베이스 모델(Qwen3.5-4B)을 내려받는다. 시간과 디스크가 든다.
-- 서버는 `127.0.0.1`에만 바인딩된다. 다른 기기가 붙게 하려면 `--host 0.0.0.0`을 쓰되 `KEV_API_KEY`로 인증을 건다.
+- 서버는 `127.0.0.1`에만 바인딩된다. 다른 기기가 붙게 하려면 스크립트를 쓰지 말고 `--host 0.0.0.0`과 `KEV_API_KEY`로 직접 띄운다. `decide`는 인증 헤더를 보내지 않으므로 키를 건 서버는 지금 부를 수 없다.
 - 포트 8009는 `decide` 데몬의 48080과 겹치지 않는다.
-- 다른 크기는 `--run jaredpalmer/kev-0.8b`(더 빠름, 정확도 낮음), `kev-9b`(느림, 약 17GB)처럼 지정한다. Kev-27B는 51GB라 32GB Mac에는 맞지 않는다.
 
 서버가 떴는지 본다.
 
@@ -80,43 +76,40 @@ curl -s http://127.0.0.1:8009/v1/models | head -c 400
 
 `"backend":"mlx"`, `"device":"mps"`가 보이면 MLX로 돌고 있다.
 
-### 2. decide가 Kev를 가리키게 한다
+### 2. decide가 서버를 가리키게 한다
 
-`decide` 0.7.0 이상이 필요하다. 이전 버전은 `url`을 모르고 무시하므로, `api_key`만 보고 진짜 TypeSafe 서버에 접속해 실패한다(훅 게이트는 조용히 통과하고 MCP 도구는 오류가 난다). 먼저 `decide --version`으로 확인한다.
+기본 주소가 `http://127.0.0.1:8009/v1/systemone`이므로 포트를 안 바꿨다면 설정할 것이 없다. `TYPESAFE_API_KEY`가 환경에 있으면 백엔드를 안 골랐을 때 TypeSafe가 선택되니 `DECIDE_BACKEND=local`로 고정한다(`~/.claude/settings.json`의 `env` 또는 `config.toml`의 `backend = "local"`).
 
-`~/.config/decide/config.toml`에 쓴다.
+포트나 호스트를 바꿨으면 `~/.config/decide/config.toml`에 쓴다.
 
 ```toml
-backend = "typesafe"
+backend = "local"
 
-[typesafe]
-api_key = "local"
-url = "http://127.0.0.1:8009/v1/systemone"
+[local]
+url = "http://127.0.0.1:8010/v1/systemone"
 ```
 
-- `api_key`는 비어 있지 않은 아무 값이면 된다. Kev는 기본으로 인증을 요구하지 않는다(`KEV_API_KEY`를 걸었다면 그 값을 쓴다).
-- 같은 값을 환경변수로도 줄 수 있다. `DECIDE_BACKEND=typesafe`, `TYPESAFE_API_KEY=local`, `DECIDE_TYPESAFE_URL=http://127.0.0.1:8009/v1/systemone`. 환경변수가 있으면 같은 키의 TOML 값은 무시한다.
-- 이미 떠 있는 데몬과 MCP 연결은 옛 설정을 쥐고 있다. 바꾼 뒤 `pkill -f "decide daemon"`으로 데몬을 한 번 끄고, Claude Code에서 `/mcp`로 `decide`를 다시 연결한다.
+같은 값을 환경변수 `DECIDE_LOCAL_URL`로도 줄 수 있다. 환경변수가 있으면 TOML 값은 무시한다. 이미 떠 있는 데몬과 MCP 연결은 옛 설정을 쥐고 있으니, 바꾼 뒤 `pkill -f "decide daemon"`으로 데몬을 한 번 끄고 Claude Code에서 `/mcp`로 `decide`를 다시 연결한다.
 
 ### 3. 붙었는지 확인한다
 
-`decide_many`를 한 번 불러 `answers`가 오는지 본다. 설정 파일 없이 환경변수만으로 시험하려면 다음처럼 한다.
+`decide_many`를 한 번 불러 `answers`와 `routing.backend == "local"`이 오는지 본다.
 
 ```bash
 echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"decide_many","arguments":{"state":"결제 서비스의 응답 지연이 관측되었습니다.","questions":{"urgent":{"type":"noul","instructions":"긴급한가?"}}}}}' \
-  | DECIDE_BACKEND=typesafe TYPESAFE_API_KEY=local DECIDE_TYPESAFE_URL=http://127.0.0.1:8009/v1/systemone decide mcp
+  | DECIDE_BACKEND=local decide mcp
 ```
 
-서버 주소가 틀리거나 서버가 꺼져 있으면 `TypeSafe 연결에 실패했습니다: ... Connection refused`로 도구 오류가 난다.
+서버가 꺼져 있으면 `로컬 연결에 실패했습니다: ... Connection refused — scripts/serve-local.sh로 로컬 서버를 띄웠는지 확인하세요`로 도구 오류가 난다.
 
 ## 되돌리기
 
-`config.toml`에서 `backend`, `[typesafe]` 블록을 지우거나 `backend = "local"`로 바꾼다. 환경변수로 줬다면 해당 변수를 지운다. 데몬을 한 번 끈다.
+`local` 대신 TypeSafe를 쓰려면 `config.toml`의 `backend`를 `typesafe`로 바꾸거나 `DECIDE_BACKEND=typesafe`와 `TYPESAFE_API_KEY`를 준다. 데몬을 한 번 끈다. 서버는 스크립트를 실행한 터미널에서 Ctrl-C로 끈다.
 
 ## 운영할 때 알아 둘 점
 
-- **서버 수명은 decide가 관리하지 않는다.** `decide daemon`과 `decide install`은 Kev 서버를 띄우지 않는다. 서버가 꺼져 있으면 모든 판단이 연결 실패다. 훅 게이트는 실패를 조용히 통과시키므로(fail-open) 서버가 죽어도 Bash 명령이 막히지 않지만, 판정도 일어나지 않는다. 재부팅 뒤 자동 실행은 launchd 등으로 직접 구성해야 하고, 이 저장소는 그 설정을 제공하지 않는다.
-- **표시가 TypeSafe로 나온다.** 응답의 `routing.backend`는 `typesafe`, `routing.model`은 `jev-latest`다. Kev가 모델 별칭을 그대로 돌려주기 때문이고, 실제로는 로컬 Kev가 답한 것이다.
+- **서버 수명은 decide가 관리하지 않는다.** `decide daemon`과 `decide install`은 서버를 띄우지 않는다. 서버가 꺼져 있으면 모든 판단이 연결 실패다. 훅 게이트는 실패를 조용히 통과시키므로(fail-open) 서버가 죽어도 Bash 명령이 막히지 않지만, 판정도 일어나지 않는다. 재부팅 뒤에는 `scripts/serve-local.sh`를 다시 실행한다. 자동 실행은 launchd 등으로 직접 구성해야 하고, 이 저장소는 그 설정을 제공하지 않는다.
+- **모델 이름이 `jev-latest`로 나온다.** `routing.backend`는 `local`이지만 `routing.model`은 서버가 돌려준 값이고, Kev는 요청의 모델 별칭(`jev-latest`)을 그대로 돌려준다. 실제로는 로컬 Kev가 답한 것이다.
 - **결과는 두 백엔드를 섞어 비교하지 않는다.** 확률 보정이 다르다.
 - **같은 기기 안에서 끝난다.** 주소가 `127.0.0.1`이면 게이트가 보내는 명령과 state도 기기 밖으로 나가지 않는다.
 - **state 길이.** Kev-0.8B, 4B, 9B는 8,192토큰까지 정확도를 확인했다(서버는 65,536토큰까지 받고 넘으면 422로 거절한다). 긴 문서에서 정확도가 떨어질 수 있다.
@@ -132,4 +125,4 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"decide_man
 2. **모델 가중치.** `kev.serve`가 받은 `jaredpalmer/kev-4b`와 베이스 모델 캐시를 `~/.cache/huggingface/hub`에서 옮긴다. 이 Mac에서는 `models--jaredpalmer--kev-4b`(어댑터)를 확인했지만 베이스 모델 가중치가 캐시의 어느 항목인지는 확인하지 못했다. `kev.serve`는 `--run`에 로컬 체크포인트 디렉터리도 받으므로, 어댑터는 그렇게 지정하는 방법도 있다.
 3. **오프라인 모드.** 사무실에서는 `HF_HUB_OFFLINE=1`을 설정해 서버가 네트워크로 나가지 않게 한다.
 
-`decide` 쪽에도 같은 점이 있다. 로컬 백엔드(Clef-flash)를 쓰는 경우 `CLEF_WEIGHTS`로 가중치를 고정해도 토크나이저(`Cloudflare/clef-flash`)는 HF 캐시를 거친다. 캐시가 미리 채워져 있으면 네트워크 없이 동작하고, 비어 있으면 실패한다. Kev만 쓰면 `decide`는 HF를 쓰지 않는다.
+`decide` 쪽에는 HuggingFace를 쓰는 부분이 없다. 오프라인 사무실에서는 서버만 위 세 가지를 갖추면 된다. `scripts/serve-local.sh`는 kev 저장소를 `git clone`하므로, 저장소를 미리 `~/.cache/decide/kev`(`KEV_DIR`)에 옮겨 두고 `KEV_REF`가 그 체크아웃에 있는 커밋이어야 한다(없으면 `git fetch`가 실패한다).

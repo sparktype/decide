@@ -2,6 +2,31 @@
 
 이 파일은 [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/) 형식을 따른다.
 
+## [0.8.0] - 2026-10-07
+
+### 변경
+
+- `local` 백엔드가 모델을 프로세스 안에서 돌리지 않고, 따로 띄운 System One 서버를 TypeSafe와 같은
+  HTTP 경로로 부른다. 주소는 `DECIDE_LOCAL_URL`, 없으면 `config.toml`의 `[local].url`, 없으면
+  `http://127.0.0.1:8009/v1/systemone`이다. 인증 헤더는 보내지 않는다. `routing.backend`는 `local`이고
+  `routing.model`은 서버가 돌려준 값이다(Kev는 `jev-latest`).
+- 로컬 서버가 꺼져 있으면 `scripts/serve-local.sh`를 안내하는 오류로 끝나고 다른 백엔드로 넘어가지 않는다.
+- choice 255개·score 10등급 한도 검사는 TypeSafe에서만 호출 전에 한다. 로컬은 서버가 판단한다.
+- `decide_many`는 로컬에서도 질문 전체를 한 번의 요청으로 보낸다.
+- 릴리스 압축 파일에는 `decide`만 들어간다(`mlx.metallib` 없음). 릴리스 워크플로에서 Xcode 선택, Metal
+  툴체인, cmake 단계를 뺐다.
+
+### 추가
+
+- `scripts/serve-local.sh`: Kev-4B(`kev.serve`, MLX)를 고정 커밋으로 받아 띄우고, 뜰 때까지 기다린 뒤
+  웜업 요청을 보낸다. `decide`는 서버를 띄우거나 감시하지 않는다.
+
+### 삭제
+
+- in-process Clef-flash 추론(`mlx-rs`, candle, `local/`), 가중치 다운로드, 데몬의 모델 선로딩,
+  `CLEF_WEIGHTS`, `DECIDE_LOCAL_REPO`, `DECIDE_LOCAL_TIMING`, `[local].weights`·`repo`·`hf_*`, `parity` 기능,
+  `tests/parity.rs`, `scripts/clef_flash_oracle.py`. 옛 설정 키는 남아 있어도 무시한다.
+
 ## [0.0.6] - 2026-10-01
 
 ### 추가

@@ -6,46 +6,29 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `decide` is an MCP tool for one non-generative judgment: `choice`, `score`, or `noul`.
 The installed program is the Rust binary `/opt/homebrew/bin/decide`. One process has two
-backends. `DECIDE_BACKEND=typesafe|local` selects one. When that variable is unset, a
-non-empty `TYPESAFE_API_KEY` selects TypeSafe Jev and an absent key selects local.
-A failed call stays on its backend. The two backends are not calibrated to each
-other. Both answer `noul` with only `type` and `noul`. The TypeSafe backend can be pointed at any
-server that speaks the same System One format (`DECIDE_TYPESAFE_URL` or config.toml
-`[typesafe].url`), which is how a local Kev server (`kev.serve`, MLX, Apple Silicon) is used as a
-fast offline model; setup and measurements are in `docs/kev-setup.md`. Such a server still reports
-`routing.backend: "typesafe"` and `routing.model: "jev-latest"`, and it is not started by `decide`.
+backends and neither runs a model: both POST to a System One server (`POST /v1/systemone`).
+`DECIDE_BACKEND=typesafe|local` selects one. When that variable is unset, a non-empty
+`TYPESAFE_API_KEY` selects TypeSafe Jev and an absent key selects local. A failed call stays
+on its backend. The two backends are not calibrated to each other. Both answer `noul` with
+only `type` and `noul`.
 
-The local backend runs real in-process inference — no server, no network call per
-request. It runs the Clef-flash backbone (Qwen3.5-9B hybrid attention) on the Apple Silicon GPU
-through MLX: `mlx-community/clef-flash-8bit` (8-bit affine, about 10.7GB), via `mlx-rs` and a Metal
-gated-delta kernel through `mlx-sys` (`local/mlx_backbone.rs`), plus a from-scratch joint schema head that
-runs on candle CPU. Weights are read from `CLEF_WEIGHTS` if set (a missing file there is a hard error, no
-silent fallback; the directory must hold that repo's `config.json`, `model.safetensors.index.json`, shards,
-and `joint_head.safetensors`) or downloaded once from HuggingFace (`mlx-community/clef-flash-8bit` for the
-backbone and head, `Cloudflare/clef-flash` for the tokenizer) into `~/.cache/huggingface/hub` otherwise —
-first use costs about 10.7GB of disk and real time. Building needs cmake and the Metal Toolchain
-(`xcodebuild -downloadComponent MetalToolchain`), and the binary only runs on Apple Silicon. Local answers
-follow the same field shape as TypeSafe (`choice`/`score`/`noul` plus `confidence` and `probabilities`);
-`routing.model` is `"clef-flash"`. Design: `docs/mlx-backend/` (plan, checklist, decision notes) and
-`docs/superpowers/specs/2026-10-02-clef-flash-local-backend-design.md` (the earlier CPU/GGUF design, kept
-as history; that engine has since been removed).
+- `typesafe` posts to `https://api.typesafe.ai/v1/systemone` with the bearer key (or to
+  `DECIDE_TYPESAFE_URL` / config.toml `[typesafe].url` for another remote server of the same format).
+- `local` posts, with no auth header, to a server that is started separately:
+  `DECIDE_LOCAL_URL`, else config.toml `[local].url`, else `http://127.0.0.1:8009/v1/systemone`.
+  `decide` never starts, serves, or watches it. `scripts/serve-local.sh` starts Kev-4B (`kev.serve`,
+  MLX, Apple Silicon; kev pinned to commit `5e42a7a`), waits until it answers, sends two warmup
+  requests, and stays in the foreground. Answers report `routing.backend: "local"` and
+  `routing.model` as the server returns it (Kev echoes the `jev-latest` alias). Setup and
+  measurements are in `docs/kev-setup.md`; the decisions are in `docs/local-http/`.
+- Before 0.8.0, local ran Clef-flash in-process (`mlx-rs` + candle, weights from HuggingFace). That
+  was removed in 0.8.0 in favour of the server; `docs/mlx-backend/` and
+  `docs/superpowers/specs/2026-10-02-clef-flash-local-backend-design.md` are history. Old
+  `[local].weights`/`repo`/`hf_*` keys and `CLEF_WEIGHTS` are ignored.
 
-Measured on an M1 Max (64GB): `cargo test --features parity` agrees with the BF16 oracle on 5/5 golden
-cases (max raw-logit diff 0.095, including an 11-option choice question whose top-2 options differ by only
-about 0.02 probability), and a warm call takes about 0.5s for ~150 tokens and 2.3s for ~860 tokens (92-94% backbone, head 30-120ms). The
-removed candle CPU path took 30s and 125s for the same inputs and agreed on 4/5. Prefill is compute-bound at
-roughly 3.6ms/token, so expect little more from kernel work on this chip. The gated-delta kernel is checked
-against an ops-based reference in a unit test.
-
-The old Python package (`src/decide/`, its `pytest` suite, `test_smoke.py`, `pyproject.toml`)
-was the comparison oracle for an earlier local backend and was deleted once that
-backend's execution verification passed. It has since been recreated as a
-comparison oracle for Clef-flash — see `scripts/clef_flash_oracle.py` instead, a
-Python script using the real HuggingFace `transformers` library against the real
-Cloudflare/clef-flash model; it stays uncommitted-weights, run manually with
-`cargo test --features parity`, not part of the default test suite. Besides that
-script and the stdlib hook `.claude/hooks/stop_verify.py`, the repo has no other
-Python.
+The repo has no Python except the stdlib hook `.claude/hooks/stop_verify.py`. The earlier Python
+package and the Clef-flash comparison oracle (`scripts/clef_flash_oracle.py`) were deleted with the
+code they checked.
 
 ## Commands
 
@@ -56,14 +39,12 @@ brew install sparktype/tap/decide
 ```
 
 The published formula is `Formula/decide.rb` in `sparktype/homebrew-tap`. This repo's
-`packaging/homebrew/decide.rb` records the same install. Version is 0.7.0. GitHub
-Actions builds `crates/decide` and uploads a release asset when a `v*` tag is pushed;
-the formula downloads that prebuilt arm64 binary and installs it, no Rust toolchain
-required at install time. The release tarball holds `decide` and `mlx.metallib` (the MLX GPU
-kernels) side by side, and the formula must install both into the same directory: MLX looks next
-to the executable first and otherwise falls back to a path baked in at build time
-(`/Users/runner/.mlx/lib/...`), which does not exist on a user's machine. v0.2.0 shipped without it
-and every inference failed. The API key stays in the environment as `TYPESAFE_API_KEY`.
+`packaging/homebrew/decide.rb` records the same install. Version is 0.8.0 in `Cargo.toml`; the
+formula file still names the 0.7.0 release (url, sha256, and the `mlx.metallib` it installs) until the
+0.8.0 release asset exists, and must then drop `mlx.metallib`, because from 0.8.0 the release tarball
+holds only `decide`. GitHub Actions builds `crates/decide` and uploads a release asset when a `v*`
+tag is pushed; the formula downloads that prebuilt arm64 binary and installs it, no Rust toolchain
+required at install time. The API key stays in the environment as `TYPESAFE_API_KEY`.
 `.mcp.json` points `decide` at `type: "http"`, `url: "http://127.0.0.1:48080/mcp"` — a
 decide daemon must already be listening there. Running `decide install` registers the
 tool in Claude Code's user scope the same way, by shelling out to `claude mcp add -s
@@ -71,7 +52,7 @@ user --transport http decide http://127.0.0.1:48080/mcp`, and spawns `decide dae
 if that port isn't already bound; this is an alternative to editing `.mcp.json` by
 hand. The daemon does not survive a reboot — run `decide daemon &` manually after one.
 
-Runtime tests, no weights and no network:
+Runtime tests, no model server and no network (`tests/daemon.rs` binds :48080, so it fails while a real `decide daemon` is running):
 
 ```bash
 cargo test --manifest-path crates/decide/Cargo.toml
@@ -117,40 +98,15 @@ or `.claude/settings.json`, restart Claude Code.
   `jev-latest`. Choice criteria are `{option: option}` in insertion order. Retry 429
   and 529 once after one second. Choice above 255 options and score above 10 levels
   fail before the request.
-- `local/mod.rs` resolves weights (`CLEF_WEIGHTS` env override, else
-  `~/.config/decide/config.toml`'s `[local].weights`, else the HuggingFace
-  cache; `ensure_weights`/`resolve_pinned`/`download_weights`), lazily builds the backbone + joint
-  head + tokenizer once per process (`runtime()`, a `OnceLock`), and exposes
-  `infer` (state + question → the same answer shape as TypeSafe, via
-  `postprocess::to_answer`). `download_weights` also honors
-  `HF_ENDPOINT`/`HF_HOME`/`HF_TOKEN` env vars (via `ApiBuilder::from_env`,
-  previously unused — `Api::new()` ignored them) or the same keys under
-  `config.toml`'s `[local]` section when the env var is unset; README
-  documents the full schema. `local/mlx_backbone.rs` is the MLX port of the Qwen3.5
-  hybrid-attention forward pass (full attention plus a gated-delta Metal kernel); it hands the
-  head the hidden states and only the option tokens' dequantized lm_head rows (`head_inputs`).
-  `local/joint_head.rs` is the from-scratch
-  schema head (EvidenceRoutingLayer × 2 + TransformerDecoderLayer × 4);
-  `local/tokenizer.rs` assembles the Clef schema text and token spans.
-  `backend::decide`/`decide_many` call `local::infer` directly — no transport,
-  no `Backend::Local` arm in `typesafe::LiveTransport`.
-  `DECIDE_LOCAL_TIMING=1` makes each `infer` print one stderr line with per-stage times
-  (`local/timing.rs`: load, tokenize, backbone_eval, host_copy, head_tensors, head); it is off by
-  default and never changes the answer. `decide daemon` (`serve_default`, not `serve_unified`, so
-  tests never load the model) preloads the model on a background thread when the backend resolves to
-  local, via `local::warmup`. Measured on M1 Max, release: warm backbone is 92-94% of the call
-  (464ms at 145 tokens, 2277ms at 861), head 33-117ms, host copy under 2ms. candle uses the
-  `accelerate` feature, which halves the head on long inputs (117ms to 58ms).
-  MLX streams only work on the thread that created them, so all local work (load, preload,
-  inference) runs on one dedicated `decide-local` thread (`on_worker` in `local/mod.rs`); calling the
-  model from the daemon's UDS, HTTP, or preload threads would otherwise fail with "There is no
-  Stream(cpu, 0) in current thread". `local::infer_many` (used by `decide_many` for two or more
-  questions) computes the shared prefix once (system prompt + state + `SCHEMA FIELDS`, the first
-  `SHARED_PREFIX_TEXT_SEGMENTS` text segments) and each question continues from it: attention K/V
-  with a rope offset, gated-delta conv and delta state carried through the Metal kernel
-  (`PrefixState`, `prefill_prefix`, `hidden_states_with` in `mlx_backbone.rs`). It falls back to a
-  full pass when a question's tokens do not start with the prefix. Measured: 4 questions on an
-  865-token state take 3.8s instead of 9.6s (2.5x), answers within 0.001 of the per-question path.
+- `backend.rs` sends the local backend through the same `typesafe::execute` path as TypeSafe:
+  `live_transport` picks `LiveTransport::local(url)` (no auth header; `pick_local_url` orders
+  `DECIDE_LOCAL_URL`, `[local].url`, `DEFAULT_LOCAL_URL`) when the backend resolves to local. The
+  255-option and 10-level limits are checked before the request for TypeSafe only; the local server
+  decides for itself. A connection failure on local gets `with_local_hint` appended
+  (`scripts/serve-local.sh`); an HTTP error keeps the server's message. `decide_many` on local is one
+  request for all questions, so the server computes the state once (Kev also caches it across
+  requests: about 470ms first call, 100ms repeat, M1 Max). `decide daemon` loads nothing; there is no
+  preload.
 - `mcp.rs` speaks newline-delimited JSON-RPC. Tool failures are `isError` results. It
   is transport-agnostic (`handle_message(&Value, &Env, &mut T) -> Option<Value>`) and
   is reused as-is by both the stdio loop (`main.rs::run_mcp`) and `http.rs`'s HTTP handler.
@@ -229,9 +185,9 @@ unreliably. See the README section "에이전트가 쓸 때".
 
 **Tests inject the backend.** Rust tests use a scripted transport and a fake clock.
 `tests/stop_hook.rs` runs `python3` against the hook's pure logic. Keep checks that
-need real weights or a live TypeSafe key (`--features parity`, `#[ignore]` local
-inference tests, the `tests/gate_eval.rs` gate evaluation) out of the default suites. `tests/gate_rules.rs`
-needs no weights and stays in the default suite: no allow-labelled command in any fixture set may match a default
+need a live local server or TypeSafe key (the `tests/gate_eval.rs` gate evaluation, which
+needs `scripts/serve-local.sh` running) out of the default suites. `tests/gate_rules.rs`
+needs no server and stays in the default suite: no allow-labelled command in any fixture set may match a default
 rule, and the rules must match heldout3's pre-registered `rule_expect`. `tests/gate_rules_replay.rs` (`#[ignore]`)
 replays a real `gate.log` through the default rules for a human to review false positives. Unix socket
 paths are limited to about 104 bytes on macOS, so tests that bind sockets use short temp directory names.

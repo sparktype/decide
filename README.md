@@ -10,10 +10,10 @@
 | --- | --- |
 | `decide` | 판단 한 건을 `choice`, `score`, `noul` 중 하나로 낸다. |
 | `decide_many` | 같은 상황(state)에 대한 질문 여러 개를 백엔드 한 번 호출로 묻는다. |
-| 백엔드 둘 | TypeSafe Jev(원격 API)와 Clef-flash(내 Mac의 GPU에서 직접 실행). 한 실행 파일이 둘을 가진다. TypeSafe 백엔드의 주소를 바꾸면 로컬 Kev 같은 System One 호환 서버도 쓴다([Kev로 decide 돌리기](docs/kev-setup.md)). |
+| 백엔드 둘 | `typesafe`(TypeSafe Jev, 원격 API)와 `local`(내 Mac에서 따로 띄운 Kev 서버). 둘 다 System One 형식의 서버를 HTTP로 부르기만 하고, `decide`는 모델을 서빙하지 않는다. 로컬 서버는 `scripts/serve-local.sh`로 띄운다([Kev로 decide 돌리기](docs/kev-setup.md)). |
 | 결과 표시 훅 | 에이전트가 `decide`로 고른 것을 사용자에게 한 줄로 보여 준다(`decide hook`). |
 | 훅 게이트 | Claude Code가 실행하려는 Bash 명령의 위험을 판정한다(`decide gate`). 명백한 위험은 정적 규칙이 모델 없이 확정하고, 나머지는 모델이 판정한다. 기본은 감사 모드라 막지 않는다. `decide gate stats`로 쌓인 로그를 집계한다. |
-| 상주 데몬 | 모델을 미리 읽어 두고 훅·MCP의 요청에 답한다. 같은 요청은 캐시한다. |
+| 상주 데몬 | 훅·MCP의 요청을 받아 백엔드로 보낸다. 같은 요청은 캐시한다. |
 
 ## 빠른 시작
 
@@ -31,8 +31,8 @@ decide install --claude               # MCP 등록 + 표시 훅 + 게이트 훅�
 | `DECIDE_BACKEND` | 동작 |
 | --- | --- |
 | `typesafe` | `TYPESAFE_API_KEY`로 [TypeSafe.ai](https://api.typesafe.ai) Jev를 호출한다. 키가 비어 있으면 오류다. |
-| `local` | 내 Mac에서 Clef-flash를 직접 돌린다. 서버도, 키도 필요 없다. |
-| 없음 | 키가 있으면 TypeSafe, 없으면 로컬이다. |
+| `local` | 따로 띄운 로컬 서버(기본 `http://127.0.0.1:8009/v1/systemone`)를 부른다. 키는 필요 없지만 서버가 먼저 떠 있어야 한다. |
+| 없음 | 키가 있으면 TypeSafe, 없으면 로컬이다. 로컬 서버가 꺼져 있으면 연결 실패 오류다. |
 
 Claude Code에서 로컬로 고정하려면 `~/.claude/settings.json`에 `env`를 넣는다. 훅이 띄우는 데몬과 MCP 서버가 모두 이 값을 읽는다.
 
@@ -44,7 +44,7 @@ Claude Code에서 로컬로 고정하려면 `~/.claude/settings.json`에 `env`�
 
 `DECIDE_BACKEND`는 `TYPESAFE_API_KEY`보다 우선한다. 이미 떠 있는 프로세스는 옛 환경을 쥐고 있으니, 바꾼 뒤에는 `/mcp`에서 `decide`를 다시 연결하고 데몬은 `pkill -f "decide daemon"`으로 한 번 끈다(다음 호출이 새로 띄운다).
 
-**Kev를 쓴다.** 응답 속도가 우선이거나 인터넷이 없는 환경이면 로컬 Kev 서버를 TypeSafe 백엔드의 주소로 지정한다. `~/.config/decide/config.toml`에 `backend = "typesafe"`와 `[typesafe]`의 `api_key = "local"`, `url = "http://127.0.0.1:8009/v1/systemone"`을 넣으면 된다. 서버 실행, 확인, 오프라인 반입과 검증한 호환 모델 목록은 [Kev로 decide 돌리기](docs/kev-setup.md)에 있다. `decide` 0.7.0 이상이어야 하고, Kev 서버는 `decide`가 띄워 주지 않는다.
+**로컬 서버를 띄운다.** `local`은 `decide`가 모델을 돌리지 않고 따로 띄운 서버를 부른다. 서버는 `scripts/serve-local.sh`가 띄운다. Kev-4B를 MLX로 올리고, 뜰 때까지 기다린 뒤 웜업 요청을 한 번 보내고 포그라운드로 남는다(`uv`가 필요하고, 첫 실행은 모델을 내려받는다). 서버 모델과 포트는 `KEV_MODEL`, `DECIDE_LOCAL_PORT`로 바꾼다. 주소를 바꿨으면 `DECIDE_LOCAL_URL`이나 `config.toml`의 `[local].url`로 알린다. 자세한 설정, 모델 목록, 측정은 [Kev로 decide 돌리기](docs/kev-setup.md)에 있다. `decide`는 서버를 띄우지도 감시하지도 않으므로 재부팅 뒤에는 스크립트를 다시 실행한다.
 
 **제대로 붙었는지 본다.** 아무 판단이나 한 번 부르고 결과의 `routing.backend`가 원하는 값(`local` 또는 `typesafe`)인지 확인한다. 게이트는 `decide gate --show`로 설정을 볼 수 있다.
 
@@ -104,18 +104,18 @@ decide_many(
 )
 ```
 
-반환은 `answers`(질문 id → 답, 입력 순서), `routing`, `latency_ms`다. 하나라도 검증에 실패하거나 백엔드가 실패하면 전체가 도구 오류이고 부분 결과는 없다. 검증 오류 앞에는 `질문 "<id>": `가 붙는다. 로컬 백엔드는 질문이 둘 이상이면 state 구간(시스템 프롬프트와 state)의 계산을 한 번만 하고 질문마다 그 뒤를 이어서 계산한다. state가 긴 경우에 이득이 크다(약 865토큰, 질문 4개에서 9.6초가 3.8초, M1 Max). state가 짧으면 질문마다 드는 고정 비용(질문·옵션·고정 꼬리 약 100토큰)이 더 커서 시간은 질문 수에 거의 비례한다. 어느 쪽이든 에이전트의 도구 호출 횟수는 줄어든다.
+반환은 `answers`(질문 id → 답, 입력 순서), `routing`, `latency_ms`다. 하나라도 검증에 실패하거나 백엔드가 실패하면 전체가 도구 오류이고 부분 결과는 없다. 검증 오류 앞에는 `질문 "<id>": `가 붙는다. 질문 전체가 한 번의 요청으로 서버에 가므로 서버가 state를 한 번만 계산해 질문마다 이어서 쓴다. 같은 state를 다시 보내면 Kev 서버가 캐시해 더 빠르다(같은 입력의 첫 호출 약 470ms, 재호출 약 100ms, M1 Max). 어느 쪽이든 에이전트의 도구 호출 횟수는 줄어든다.
 
 질문 하나하나는 yes/no나 단일 선택처럼 작게 쪼갠다. 복합 질문은 정확도가 떨어진다. 앞 답에 따라 뒤 질문을 정해야 하면 호출을 나눈다.
 
 ### 에이전트가 쓸 때
 
 - **언제 부르나.** 답이 선택지·등급·확률로 고정되는 판단 한 건일 때 부른다. 서술, 요약, 계획처럼 글을 만들어야 하는 일에는 쓰지 않는다.
-- **실패하면.** 그 오류로 작업을 멈추지 않고 직접 추론해서 계속한다. 검증 오류와 백엔드 오류는 도구 오류로 돌아온다. 로컬 백엔드의 실패는 보통 가중치 다운로드·로드 오류이니 사용자에게 한 줄로 알린다.
+- **실패하면.** 그 오류로 작업을 멈추지 않고 직접 추론해서 계속한다. 검증 오류와 백엔드 오류는 도구 오류로 돌아온다. 로컬 백엔드의 실패는 보통 서버가 꺼져 있는 연결 오류이니(`scripts/serve-local.sh`) 사용자에게 한 줄로 알린다.
 - **어느 백엔드가 답했나.** `routing.backend`를 본다. 같은 질문이라도 TypeSafe와 로컬의 확률은 보정이 달라 섞어서 비교하지 않는다.
 - **임계값.** `noul`을 조건으로 쓸 때 기준은 부르는 쪽이 정한다. 경계 근처(0.3~0.7)면 한 번 더 확인한다.
 
-옵션 한도는 백엔드마다 다르다. TypeSafe는 `choice` 옵션 255개, `score` 등급 10개까지이고 넘으면 호출 전에 오류가 난다. 로컬은 코드에 별도 상한이 없고 모델의 컨텍스트 길이 안에서만 제한된다.
+옵션 한도는 백엔드마다 다르다. TypeSafe는 `choice` 옵션 255개, `score` 등급 10개까지이고 넘으면 호출 전에 오류가 난다. 로컬은 `decide`가 상한을 두지 않고 서버가 판단한다(Kev는 state 65,536토큰 초과를 422로 거절한다).
 
 ## 백엔드
 
@@ -123,23 +123,21 @@ decide_many(
 
 ### TypeSafe
 
-키는 환경 변수 `TYPESAFE_API_KEY`나 `config.toml`의 `[typesafe].api_key`로 읽는다. 호출 주소는 기본이 `https://api.typesafe.ai/v1/systemone`이고 요청의 `model`은 `jev-latest`다. 요청 내용은 TypeSafe 서버로 나간다. `DECIDE_TYPESAFE_URL`이나 `[typesafe].url`을 주면 같은 System One 형식을 말하는 서버로 보낸다. 그 서버가 같은 기기의 Kev면 내용은 기기 밖으로 나가지 않는다([Kev로 decide 돌리기](docs/kev-setup.md)). 응답의 `routing.backend`는 그 경우에도 `typesafe`, `routing.model`은 서버가 돌려준 별칭(`jev-latest`)이다.
+키는 환경 변수 `TYPESAFE_API_KEY`나 `config.toml`의 `[typesafe].api_key`로 읽는다. 호출 주소는 기본이 `https://api.typesafe.ai/v1/systemone`이고 요청의 `model`은 `jev-latest`다. 요청 내용은 TypeSafe 서버로 나간다. `DECIDE_TYPESAFE_URL`이나 `[typesafe].url`을 주면 같은 System One 형식을 말하는 서버로 보낸다. 그 경우에도 `routing.backend`는 `typesafe`다. 같은 기기의 Kev를 쓰려면 이 주소를 바꾸지 말고 `local` 백엔드를 쓴다.
 
-### 로컬 (Clef-flash)
+### 로컬 (별도 서버)
 
-Cloudflare의 Clef-flash(Qwen3.5-9B 하이브리드 백본)를 MLX 8비트로 Apple Silicon GPU에서 직접 돌리고, 자체 구현한 joint schema head를 같은 프로세스 안에서 함께 돌린다. 띄워 둘 서버가 없고 네트워크 호출도 없다. Apple Silicon에서만 돈다.
+`decide`가 모델을 돌리지 않는다. 따로 띄운 System One 호환 서버에 `POST /v1/systemone`을 보내고, TypeSafe와 같은 요청·응답 형식을 쓴다. 인증 헤더는 보내지 않는다. Apple Silicon의 Kev-4B(MLX)를 `scripts/serve-local.sh`로 띄우는 것이 기본이다.
 
-- 가중치는 `mlx-community/clef-flash-8bit`(약 10.7GB)다. `CLEF_WEIGHTS`가 없으면 처음 쓸 때 HuggingFace에서 받아 `~/.cache/huggingface/hub`에 둔다(토크나이저는 `Cloudflare/clef-flash`). 첫 호출은 그만큼 시간과 디스크를 쓴다.
-- `CLEF_WEIGHTS`에 디렉터리를 넣으면 그 안에서 `config.json`, `model.safetensors.index.json`, 샤드 safetensors, `joint_head.safetensors`를 찾는다. 하나라도 없으면 다운로드로 넘어가지 않고 그대로 오류다.
-- 따뜻한 상태의 한 번 호출은 약 150토큰에 0.5초, 약 860토큰에 2.3초다(M1 Max). 시간의 92~94%는 백본이고 조인트 헤드는 30~120ms다. 처음 부를 때 모델을 올리는 시간(약 1~4초, 디스크 캐시 상태에 따라)은 데몬이 미리 치른다(아래 "상주 데몬").
-- 저장소는 `DECIDE_LOCAL_REPO`나 `[local].repo`로 바꾼다. 4비트(`mlx-community/clef-flash-4bit`, 약 6GB)는 속도가 8비트와 같고(prefill이 연산 한계라서) 디스크와 메모리만 절반이다. 대신 확률이 퍼져서 골든 케이스의 로짓 최대 차이가 0.095에서 1.157로 커지고(같은 choice 질문에서 1위 확률 0.844가 0.599), 판단은 5/5 같았다. 메모리가 모자랄 때만 고르고, 4비트로 임계값을 새로 잡는다.
-- `DECIDE_LOCAL_TIMING=1`이면 추론마다 단계별 시간(`load`, `tokenize`, `backbone_eval`, `host_copy`, `head_tensors`, `head`)을 stderr 한 줄로 찍는다. 기본은 꺼져 있고 답은 바뀌지 않는다.
-- 답의 모양은 TypeSafe와 같다. `routing.model`이 `"clef-flash"`다.
-- 5개 골든 케이스로 BF16 Python 오라클과 대조해 5/5가 일치한다(8비트 기준 로짓 최대 차이 0.095). 선택지가 11개인 질문처럼 1·2위 확률 차이가 0.02 안쪽인 거의 동률 사례도 있으니, 중요한 판단이면 `probabilities`를 보고 직접 확인한다.
+- 주소는 `DECIDE_LOCAL_URL`, 없으면 `[local].url`, 없으면 `http://127.0.0.1:8009/v1/systemone`이다.
+- 서버가 꺼져 있으면 `로컬 연결에 실패했습니다: … — scripts/serve-local.sh로 로컬 서버를 띄웠는지 확인하세요`로 끝나고 TypeSafe로 넘어가지 않는다.
+- 같은 입력에서 이전의 in-process Clef-flash보다 3~5배 빠르고 서버가 state를 캐시한다([측정](docs/kev-setup.md)). 정확도는 Kev가 Jev보다 낮다. 중요한 판단에 쓰기 전에 실제 질문으로 일치율을 잰다.
+- `routing.backend`는 `local`이고 `routing.model`은 서버가 돌려준 값이다. Kev는 요청의 모델 별칭(`jev-latest`)을 그대로 돌려주므로 그렇게 보인다.
+- 0.7.0까지 있던 in-process Clef-flash(`CLEF_WEIGHTS`, `DECIDE_LOCAL_REPO`, `[local].weights`·`repo`·`hf_*`)는 0.8.0에서 지웠다. 옛 설정 키가 남아 있어도 무시된다.
 
 ### 상주 데몬
 
-`decide daemon`은 한 프로세스에서 두 트랜스포트를 함께 서빙한다 — 게이트 훅용 Unix 소켓(`~/.cache/decide/decide.sock`)과 MCP용 로컬 HTTP(`http://127.0.0.1:48080/mcp`). 모델은 한 번만 읽어 두고 두 트랜스포트가 공유하며, 로컬 백엔드면 데몬이 뜨자마자 백그라운드에서 모델을 올리고 더미 추론을 한 번 돌려 첫 요청이 로딩을 떠안지 않게 한다. 로컬 추론은 전용 스레드 하나에서만 돌아간다(MLX 스트림이 만든 스레드에서만 쓰이는 제약 때문이다). 둘 다 30분 동안 요청이 없으면 끝난다. 게이트 요청(`state`, `type`, `instructions`, `options`, `criteria`, 백엔드가 모두 같음)은 최대 64개까지 캐시하며, 캐시된 답은 `routing.cached: true`, `latency_ms: 0`이다. 훅은 데몬이 꺼져 있으면 띄워 두고, `decide install`도 설치 시점에 한 번 띄운다 — 재부팅 뒤에는 자동으로 뜨지 않으니 수동으로 `decide daemon &`을 실행한다. 클라이언트의 버전이 데몬과 다르면(UDS 쪽만) 데몬이 스스로 끝나 새로 뜨므로 업그레이드 뒤 옛 데몬이 남지 않는다. 옛 stdio MCP 서버(`decide mcp`)는 호환을 위해 남아 있지만 `decide install`은 더 이상 그 경로로 등록하지 않는다.
+`decide daemon`은 한 프로세스에서 두 트랜스포트를 함께 서빙한다 — 게이트 훅용 Unix 소켓(`~/.cache/decide/decide.sock`)과 MCP용 로컬 HTTP(`http://127.0.0.1:48080/mcp`). 백엔드 호출은 `decide`가 직접 하지 않고 서버로 보내므로 데몬에 모델은 올라가지 않는다. 둘 다 30분 동안 요청이 없으면 끝난다. 게이트 요청(`state`, `type`, `instructions`, `options`, `criteria`, 백엔드가 모두 같음)은 최대 64개까지 캐시하며, 캐시된 답은 `routing.cached: true`, `latency_ms: 0`이다. 훅은 데몬이 꺼져 있으면 띄워 두고, `decide install`도 설치 시점에 한 번 띄운다 — 재부팅 뒤에는 자동으로 뜨지 않으니 수동으로 `decide daemon &`을 실행한다. 클라이언트의 버전이 데몬과 다르면(UDS 쪽만) 데몬이 스스로 끝나 새로 뜨므로 업그레이드 뒤 옛 데몬이 남지 않는다. 옛 stdio MCP 서버(`decide mcp`)는 호환을 위해 남아 있지만 `decide install`은 더 이상 그 경로로 등록하지 않는다.
 
 ## 결과를 눈으로 보기 (`decide hook`)
 
@@ -178,14 +176,14 @@ Cloudflare의 Clef-flash(Qwen3.5-9B 하이브리드 백본)를 MLX 8비트로 Ap
 ```text
 🛡 decide gate bash-risk: deny (감사 모드 — 막지 않음)
 • 대상: dd if=/dev/zero of=/dev/disk2
-• 선택: deny 95% · ask 3% · allow 2% · local · clef-flash · 713ms
+• 선택: deny 95% · ask 3% · allow 2% · local · jev-latest · 713ms
 ```
 
 위 문자열이 `additionalContext`에 담겨 모델에게 전달되는 내용이다. 질문 자체("이 셸 명령은 저장소 밖의 데이터나 상태를 파괴하거나 되돌리기 어렵게 바꾸는가?")는 매 호출 반복이라 담지 않는다 — `decide gate --show bash-risk`로 본다.
 
 설치는 `decide install --claude` 한 줄이다. 이미 표시 훅만 설치한 사용자가 다시 실행하면 게이트만 추가된다.
 
-**무엇을 보내나.** 게이트는 훅 입력의 명령에서 키·토큰·비밀번호·URL 자격증명을 `***`로 가린 뒤, 작업 디렉터리의 끝 두 단계와 함께 보낸다. **로컬 백엔드면(그리고 `url`을 같은 기기의 Kev로 지정했으면) 이 내용이 기기 밖으로 나가지 않는다. 그러나 `TYPESAFE_API_KEY`가 있고 `DECIDE_BACKEND`를 정하지 않았으면 TypeSafe가 선택되어, 가린 명령이 TypeSafe 서버로 나간다.** 게이트를 쓸 때는 로컬로 고정하는 편을 권한다(위 "빠른 시작").
+**무엇을 보내나.** 게이트는 훅 입력의 명령에서 키·토큰·비밀번호·URL 자격증명을 `***`로 가린 뒤, 작업 디렉터리의 끝 두 단계와 함께 보낸다. **로컬 백엔드면(서버가 같은 기기의 `127.0.0.1`이면) 이 내용이 기기 밖으로 나가지 않는다. 그러나 `TYPESAFE_API_KEY`가 있고 `DECIDE_BACKEND`를 정하지 않았으면 TypeSafe가 선택되어, 가린 명령이 TypeSafe 서버로 나간다.** 게이트를 쓸 때는 로컬로 고정하는 편을 권한다(위 "빠른 시작").
 
 **어떻게 판정하나.** 순서는 `정적 규칙(deny → ask) → 사전 필터 → 모델`이다.
 - **정적 규칙.** 명령(`&&`·`||`·`;`·줄바꿈으로 나눈 각 조각)이 `deny_patterns` 또는 `ask_patterns`에 걸리면 모델을 부르지 않고 그 판정으로 끝난다. 기본으로 `deny` 45개(루트·홈·시스템 디렉터리 삭제, 디스크 장치 쓰기·포맷, 원격 스크립트를 셸에 파이프, 데이터베이스 통째 삭제 등)와 `ask` 23개(강제 푸시, `git clean -fd`, `git reset --hard`, 개인 키·자격증명·`.env`를 읽는 명령)가 들어 있다. 아래 "정적 규칙"을 본다.
@@ -238,7 +236,7 @@ Cloudflare의 Clef-flash(Qwen3.5-9B 하이브리드 백본)를 MLX 8비트로 Ap
 모델이 필요했던 호출 중 시간 초과 24/228건 (10.5%)
 ```
 
-**아직 enforce로 쓰기에는 이르다.** 사람이 라벨을 붙인 30건 세트 네 개를 로컬 모델로 재 본 결과(`deny` 0.7 기준)다.
+**아직 enforce로 쓰기에는 이르다.** 사람이 라벨을 붙인 30건 세트 네 개를 0.7.0까지의 in-process Clef-flash 8비트로 재 본 결과(`deny` 0.7 기준)다. 지금의 로컬 서버(Kev)로는 다시 재지 않았다.
 
 | 세트 | 정답 | 정상 명령을 `deny`로 거부 | 정상 명령을 `ask`로 되물음 | `deny` 기대 명령을 `allow`로 통과 |
 | --- | --- | --- | --- | --- |
@@ -258,9 +256,9 @@ Cloudflare의 Clef-flash(Qwen3.5-9B 하이브리드 백본)를 MLX 8비트로 Ap
 **한계.**
 - 사전 필터를 통과한 명령은 모델이 보지 않는다. 정적 규칙이 대표적인 민감 파일(`.env`, `~/.ssh/id_*`, `~/.aws/credentials` 등)을 읽는 명령은 먼저 `ask`로 잡지만, 그 밖의 파일을 `cat`으로 읽는 것은 이 게이트의 질문(파괴·되돌리기 어려운 변경)에 들어가지 않는다.
 - 정적 규칙은 `$(…)`와 백틱 안, `bash -c "…"`의 따옴표 안, 변수·별칭 확장은 들여다보지 못한다. 확정적 안전망이지 완전한 방어가 아니다.
-- 로컬 엔진은 사전 필터를 지나지 못한 Bash 호출마다 약 1초가 더 든다. **그런데 사전 필터는 셸 메타문자(`|`, `&`, `>`, `;`, `$(`…)가 든 명령을 건너뛰지 않아서, 에이전트가 만든 복합 명령이 많은 사용에서는 거의 도움이 되지 않는다.** 실제 로그에서 모델이 판정한 호출의 79%가 메타문자를 포함했고, 읽기 전용 명령을 더 넣은 확대(12개에서 39개)가 건너뛰게 한 호출은 사실상 0건이었다. 읽기 명령만 이어 붙인 파이프·`;` 연결을 건너뛰게 하려면 사전 필터의 매칭 방식을 바꿔야 하며 아직 하지 않았다.
+- 모델 판정은 사전 필터를 지나지 못한 Bash 호출마다 시간이 더 든다(아래 측정은 이전의 in-process Clef-flash 기준으로 약 1초이고, Kev 서버는 더 짧다). **그런데 사전 필터는 셸 메타문자(`|`, `&`, `>`, `;`, `$(`…)가 든 명령을 건너뛰지 않아서, 에이전트가 만든 복합 명령이 많은 사용에서는 거의 도움이 되지 않는다.** 실제 로그에서 모델이 판정한 호출의 79%가 메타문자를 포함했고, 읽기 전용 명령을 더 넣은 확대(12개에서 39개)가 건너뛰게 한 호출은 사실상 0건이었다. 읽기 명령만 이어 붙인 파이프·`;` 연결을 건너뛰게 하려면 사전 필터의 매칭 방식을 바꿔야 하며 아직 하지 않았다.
 - 사전 필터의 `git branch`는 앞부분 일치라 `git branch -D …` 같은 삭제도 건너뛴다.
-- 두 백엔드의 확률은 보정이 달라, 임계값은 로컬 백엔드(Clef-flash 8비트)로만 쟀다. TypeSafe나 Kev, 4비트를 쓰면 같은 값이 같은 의미라고 보지 않는다.
+- 두 백엔드의 확률은 보정이 달라, 임계값은 0.7.0까지의 in-process Clef-flash 8비트로만 쟀다. 지금의 로컬 서버(Kev)나 TypeSafe를 쓰면 같은 값이 같은 의미라고 보지 않는다.
 - 버전을 모르는 옛 클라이언트(예: 이 저장소의 `stop_verify.py`)는 옛 데몬을 계속 쓸 수 있으니, 필요하면 `pkill -f "decide daemon"`으로 한 번 끈다.
 
 ## 명령줄
@@ -273,9 +271,9 @@ Cloudflare의 Clef-flash(Qwen3.5-9B 하이브리드 백본)를 MLX 8비트로 Ap
 | `decide hook` | `PostToolUse` 훅. `decide` 결과를 한 줄로 보여 준다. |
 | `decide gate <이름>` / `--show` / `stats` | `PreToolUse` 훅. Bash 명령을 판정하거나, 게이트 설정을 보여 주거나, 감사 로그를 집계한다. |
 
-`decide --version`(`-V`)은 `decide 0.7.0`처럼 버전 한 줄을, `decide --help`(`-h`)와 인자 없는 `decide`는 전체 도움말을, `decide <명령> --help`와 `decide help <명령>`은 그 명령의 도움말을 낸다. 도움말과 버전은 stdout에 쓰고 종료 코드 0이다. 알 수 없는 명령이나 잘못된 인자는 stderr에 이유를 쓰고 종료 코드 2다. `mcp --help`와 `daemon --help`도 서버를 시작하지 않는다.
+`decide --version`(`-V`)은 `decide 0.8.0`처럼 버전 한 줄을, `decide --help`(`-h`)와 인자 없는 `decide`는 전체 도움말을, `decide <명령> --help`와 `decide help <명령>`은 그 명령의 도움말을 낸다. 도움말과 버전은 stdout에 쓰고 종료 코드 0이다. 알 수 없는 명령이나 잘못된 인자는 stderr에 이유를 쓰고 종료 코드 2다. `mcp --help`와 `daemon --help`도 서버를 시작하지 않는다.
 
-환경 변수는 `DECIDE_BACKEND`(`typesafe` 또는 `local`), `TYPESAFE_API_KEY`, `DECIDE_TYPESAFE_URL`(System One 호환 서버 주소), `CLEF_WEIGHTS`(로컬 가중치 디렉터리), `DECIDE_LOCAL_REPO`(로컬 가중치 저장소), `DECIDE_LOCAL_TIMING`(추론 단계별 시간 출력)이다. 현재 버전은 0.7.0이다. formula는 GitHub Release의 사전 빌드 arm64 바이너리(`decide`와 GPU 커널 묶음 `mlx.metallib`)를 그대로 설치한다.
+환경 변수는 `DECIDE_BACKEND`(`typesafe` 또는 `local`), `TYPESAFE_API_KEY`, `DECIDE_TYPESAFE_URL`(TypeSafe 대신 보낼 System One 호환 서버 주소), `DECIDE_LOCAL_URL`(로컬 서버 주소)이다. 현재 버전은 0.8.0이다. formula는 GitHub Release의 사전 빌드 arm64 바이너리를 그대로 설치한다.
 
 같은 값을 `~/.config/decide/config.toml`로도 지정할 수 있다. 환경변수가 있으면
 같은 키의 TOML 값은 무시한다. 파일이 없으면 조용히 건너뛰고, 읽기나 TOML 파싱에
@@ -290,36 +288,21 @@ api_key = "sk-..."       # TYPESAFE_API_KEY와 같은 뜻
 url = "http://127.0.0.1:8009/v1/systemone"   # DECIDE_TYPESAFE_URL과 같은 뜻(기본은 TypeSafe 주소)
 
 [local]
-weights = "/path/to/weights"   # CLEF_WEIGHTS와 같은 뜻
-repo = "mlx-community/clef-flash-4bit"   # DECIDE_LOCAL_REPO와 같은 뜻(기본은 clef-flash-8bit)
-hf_endpoint = "https://nexus.example/hf-proxy"  # HF_ENDPOINT와 같은 뜻
-hf_home = "/path/to/cache"      # HF_HOME과 같은 뜻
-hf_token = "hf_..."             # HF_TOKEN과 같은 뜻(hf-hub 자체는 이 환경변수를 지원하지 않는다)
+url = "http://127.0.0.1:8009/v1/systemone"   # DECIDE_LOCAL_URL과 같은 뜻(기본값과 같다)
 ```
 
-`[typesafe].url`(또는 `DECIDE_TYPESAFE_URL`)은 TypeSafe 대신 같은 System One 형식을 말하는 서버로
-보낸다. 로컬 Kev 서버(`kev.serve`)를 기본 모델로 쓰는 설정은 다음과 같다. 키는 비어 있지 않은 아무
-값이면 된다. Kev 서버는 `decide`가 띄우지 않으므로 먼저 실행돼 있어야 한다. 서버 실행, 확인, 되돌리기,
-인터넷 없는 사무실로 옮기는 법은 [Kev로 decide 돌리기](docs/kev-setup.md)에 있다.
-
-```toml
-backend = "typesafe"
-
-[typesafe]
-api_key = "local"
-url = "http://127.0.0.1:8009/v1/systemone"
-```
+`[typesafe].url`(또는 `DECIDE_TYPESAFE_URL`)은 TypeSafe 대신 같은 System One 형식을 말하는 원격 서버로 보낸다. 같은 기기의 Kev는 `[local].url`로 가리킨다. 서버 실행, 확인, 오프라인 반입은 [Kev로 decide 돌리기](docs/kev-setup.md)에 있다.
 
 ## 개발
 
-런타임은 `crates/decide`다. 기본 테스트는 가중치와 네트워크 없이 돈다.
+런타임은 `crates/decide`다. 기본 테스트는 모델 서버와 네트워크 없이 돈다. 데몬 통합 테스트(`tests/daemon.rs`)는 48080 포트를 쓰므로 실제 `decide daemon`이 떠 있으면 실패한다.
 
 ```bash
 cargo test --manifest-path crates/decide/Cargo.toml
 ```
 
-가중치가 필요한 검사는 기본 테스트에 넣지 않았다. Clef-flash의 비교 오라클은 `scripts/clef_flash_oracle.py`(Python `transformers`)이고 `cargo test --features parity`로 돈다. 게이트 평가는 위 "훅에서 decide로 판정하기"의 명령을 쓴다. 저장소에 남은 Python은 그 오라클 스크립트와 표준 라이브러리만 쓰는 Stop 훅이다.
+로컬 서버가 필요한 검사는 기본 테스트에 넣지 않았다(게이트 평가 `tests/gate_eval.rs`는 `scripts/serve-local.sh`를 먼저 띄우고 `--ignored`로 돈다). 저장소에 남은 Python은 표준 라이브러리만 쓰는 Stop 훅이다.
 
-Stop 훅 `.claude/hooks/stop_verify.py`는 소켓이 없으면 `/opt/homebrew/bin/decide daemon`을 백그라운드로 띄우고, 그 호출은 통과시킨다. 로컬 백엔드가 가중치 다운로드·로드에 실패하면 데몬 호출이 오류가 되고, 훅은 그 오류를 통과로 처리한다. 노울 신뢰도 임계값(기본 0.4)은 `DECIDE_STOP_THRESHOLD` 환경 변수로 바꿀 수 있다. `.claude/`는 `.gitignore` 대상이지만 이 훅 하나는 예외 규칙으로 추적한다. 스킬 파일 `.claude/skills/decide/SKILL.md`는 저장소에 포함되지 않는다.
+Stop 훅 `.claude/hooks/stop_verify.py`는 소켓이 없으면 `/opt/homebrew/bin/decide daemon`을 백그라운드로 띄우고, 그 호출은 통과시킨다. 로컬 서버에 연결하지 못하면 데몬 호출이 오류가 되고, 훅은 그 오류를 통과로 처리한다. 노울 신뢰도 임계값(기본 0.4)은 `DECIDE_STOP_THRESHOLD` 환경 변수로 바꿀 수 있다. `.claude/`는 `.gitignore` 대상이지만 이 훅 하나는 예외 규칙으로 추적한다. 스킬 파일 `.claude/skills/decide/SKILL.md`는 저장소에 포함되지 않는다.
 
-설계는 `docs/superpowers/specs/2026-09-29-decide-rust-runtime-design.md`에 있다. 로컬 백엔드는 `docs/superpowers/specs/2026-10-02-clef-flash-local-backend-design.md`를, 게이트는 `docs/superpowers/specs/2026-10-04-decide-gate-design.md`를, MLX 엔진 전환은 `docs/mlx-backend/`를 따른다.
+설계는 `docs/superpowers/specs/2026-09-29-decide-rust-runtime-design.md`에 있다. 로컬 백엔드는 `docs/local-http/`(별도 서버 호출로의 전환, 0.8.0)를, 이전의 in-process 설계는 `docs/superpowers/specs/2026-10-02-clef-flash-local-backend-design.md`와 `docs/mlx-backend/`(역사)를, 게이트는 `docs/superpowers/specs/2026-10-04-decide-gate-design.md`를 따른다.
