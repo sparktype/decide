@@ -225,12 +225,14 @@ fn rule_permission(verdict: Verdict, pattern: &str, gate: &str) -> Option<(&'sta
 
 /// 사용자에게 보여 줄 근거 문구. 표시 방식(`display`)과 결과 종류에 따라 없을 수 있다.
 /// 고정된 질문 문구(`QUESTION`)는 매 호출 반복이라 보이지 않는다 — `decide gate --show`로 본다.
+/// 훅 systemMessage는 마크다운을 렌더링하지 않으므로(`- `가 `•`로 바뀌지 않는다, 실측 확인됨),
+/// 불릿은 유니코드 `•`를 직접 문자열에 넣는다.
 fn message(outcome: &Outcome) -> Option<String> {
     let head = format!("🛡 decide gate {}:", outcome.gate);
     let command = truncate(&outcome.command);
     let mut text = match &outcome.kind {
         Kind::Prefiltered if outcome.display == Display::All => {
-            format!("{head} 사전 필터 통과\n- 대상: {command}")
+            format!("{head} 사전 필터 통과\n• 대상: {command}")
         }
         Kind::Failed { reason } if outcome.display != Display::Off => {
             format!("{head} 판정 없이 통과 ({reason})")
@@ -244,7 +246,7 @@ fn message(outcome: &Outcome) -> Option<String> {
                 return None;
             }
             format!(
-                "{head} {} ({})\n- 대상: {command}\n- 선택: {} · {}",
+                "{head} {} ({})\n• 대상: {command}\n• 선택: {} · {}",
                 verdict_label(*verdict),
                 mode_text(outcome.mode, *verdict),
                 ranked(probs),
@@ -253,7 +255,7 @@ fn message(outcome: &Outcome) -> Option<String> {
         }
         Kind::Rule { verdict, pattern } if *verdict != Verdict::Allow && outcome.display != Display::Off => {
             format!(
-                "{head} {} ({})\n- 근거: 정적 규칙 `{pattern}` (모델 호출 없음)\n- 대상: {command}",
+                "{head} {} ({})\n• 근거: 정적 규칙 `{pattern}` (모델 호출 없음)\n• 대상: {command}",
                 verdict_label(*verdict),
                 mode_text(outcome.mode, *verdict),
             )
@@ -261,7 +263,7 @@ fn message(outcome: &Outcome) -> Option<String> {
         _ => return None,
     };
     if outcome.warnings > 0 {
-        text.push_str(&format!("\n- 설정 경고 {}건: decide gate --show로 확인", outcome.warnings));
+        text.push_str(&format!("\n• 설정 경고 {}건: decide gate --show로 확인", outcome.warnings));
     }
     Some(text)
 }
@@ -324,7 +326,7 @@ mod tests {
     #[test]
     fn audit_deny_shows_the_reasoning_but_makes_no_permission_decision() {
         let output = hook_output(&judged(Verdict::Deny, Mode::Audit, Display::Decisions));
-        let expected = "🛡 decide gate bash-risk: deny (감사 모드 — 막지 않음)\n- 대상: rm -rf ~/Downloads/old\n- 선택: deny 62% · ask 30% · allow 8% · local · clef-flash · 540ms";
+        let expected = "🛡 decide gate bash-risk: deny (감사 모드 — 막지 않음)\n• 대상: rm -rf ~/Downloads/old\n• 선택: deny 62% · ask 30% · allow 8% · local · clef-flash · 540ms";
         assert_eq!(message(&output), expected);
         assert!(output.unwrap().get("hookSpecificOutput").is_none(), "감사 모드는 판정을 내리면 안 된다");
     }
@@ -374,7 +376,7 @@ mod tests {
         assert!(hook_output(&outcome).is_none());
         outcome.display = Display::All;
         let text = message(&hook_output(&outcome));
-        assert_eq!(text, "🛡 decide gate bash-risk: 사전 필터 통과\n- 대상: git status");
+        assert_eq!(text, "🛡 decide gate bash-risk: 사전 필터 통과\n• 대상: git status");
     }
 
     #[test]
@@ -394,9 +396,9 @@ mod tests {
         outcome.command = format!("echo {}", "가".repeat(200));
         outcome.warnings = 2;
         let text = message(&hook_output(&outcome));
-        let target = text.lines().find(|line| line.starts_with("- 대상: ")).unwrap();
-        assert_eq!(target.trim_start_matches("- 대상: ").chars().count(), 81, "80자 + …");
-        assert!(text.ends_with("- 설정 경고 2건: decide gate --show로 확인"), "{text}");
+        let target = text.lines().find(|line| line.starts_with("• 대상: ")).unwrap();
+        assert_eq!(target.trim_start_matches("• 대상: ").chars().count(), 81, "80자 + …");
+        assert!(text.ends_with("• 설정 경고 2건: decide gate --show로 확인"), "{text}");
     }
 
     #[test]
@@ -547,7 +549,7 @@ mod tests {
     #[test]
     fn audit_rule_shows_the_pattern_without_a_question_or_probabilities() {
         let output = hook_output(&ruled(Verdict::Deny, Mode::Audit, Display::Decisions));
-        let expected = "🛡 decide gate bash-risk: deny (감사 모드 — 막지 않음)\n- 근거: 정적 규칙 `*mkfs*` (모델 호출 없음)\n- 대상: sudo mkfs.ext4 /dev/sda";
+        let expected = "🛡 decide gate bash-risk: deny (감사 모드 — 막지 않음)\n• 근거: 정적 규칙 `*mkfs*` (모델 호출 없음)\n• 대상: sudo mkfs.ext4 /dev/sda";
         assert_eq!(message(&output), expected);
         assert!(output.unwrap().get("hookSpecificOutput").is_none(), "감사 모드는 판정을 내리면 안 된다");
     }
