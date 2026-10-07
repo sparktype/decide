@@ -90,3 +90,6 @@
 
 ## 2026-10-07 불릿을 더 작게
 - 박스 제목의 불릿을 `●`에서 더 작은 `•`(U+2022)로 바꿨다. 데몬 표시(`daemon ●`)와 알림 밴드의 색 점(`●`)은 크기를 키워 눈에 띄게 하려고 그대로 둔다.
+
+## 2026-10-07 라벨 첫 글자를 대문자로
+- 패널의 박스 제목, 범례 라벨, 머리줄 오른쪽 문구, 지연 노트의 첫 글자를 대문자로 바꿨다(`Backend`, `Decide gate`, `Decision path`, `Latency`, `Allow/Ask/Deny`, `Static rule/Prefilter/Model/Fail-open`, `Daemon`, `Avg 5m`, `Samples · P90 · Max`). 집계 키(`model`, `static rule` 등)와 백엔드 이름, URL, 출처 `(env)` 같은 데이터 값은 그대로다. 상태 줄, 토스트, 밴드는 이번에 바꾸지 않았다.
