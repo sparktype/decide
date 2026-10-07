@@ -4,7 +4,6 @@ pub mod config;
 pub mod daemon;
 pub mod gate;
 pub mod help;
-pub mod http;
 pub mod mcp;
 pub mod protocol;
 pub mod show;
