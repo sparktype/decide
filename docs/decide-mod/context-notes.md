@@ -59,3 +59,6 @@
 ## 2026-10-07 화면 라벨을 영문으로
 - 패널, 상태 줄, 토스트, 밴드에 보이는 문자열을 모두 영문으로 바꿨다(`decision path`, `static rule`, `prefilter`, `model`, `fail-open`, `latency`, `avg 5m`, `daemon`, 출처 `env`/`config.toml`/`default`/`by API key`). 소스 주석과 테스트 제목은 CLAUDE.md 규칙대로 한글이다.
 - 로그에 남은 한글(데몬 시간 초과 사유 등)은 이 모드가 화면에 내지 않는다. `failure`는 유무만 센다.
+
+## 2026-10-07 구역마다 박스
+- 바깥 상자 하나를 없애고 backend, gate, decision path, latency를 각각 둥근 테두리 상자로 나눴다. backend 상자는 머리줄 오른쪽에 `daemon ●`(초록)/`○ down`(빨강)을 두고, 백엔드와 출처, 엔드포인트와 출처를 한 줄씩 보인다. 모든 상자는 같은 폭(`width + 4`)이다.
