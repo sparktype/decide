@@ -171,6 +171,11 @@ impl LiveTransport {
         Self::build(url, Some(key.to_string()))
     }
 
+    /// 따로 띄운 로컬 서버로 보낸다. 인증 헤더를 보내지 않는다.
+    pub fn local(url: &str) -> Self {
+        Self::build(url.trim(), None)
+    }
+
     fn build(url: &str, key: Option<String>) -> Self {
         Self {
             agent: ureq::AgentBuilder::new()

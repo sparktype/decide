@@ -1,11 +1,13 @@
-use crate::local;
 use crate::protocol::{
-    parse_arguments, parse_many, validate, validate_many, DecideManyResult, DecideResult, Question,
+    parse_arguments, parse_many, validate, validate_many, DecideManyResult, DecideResult,
 };
 use crate::typesafe::{self, LiveTransport, Transport};
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 
 pub const MISSING_KEY: &str = "TYPESAFE_API_KEY가 없습니다";
+/// 로컬 서버(`scripts/serve-local.sh`가 띄우는 kev.serve)의 기본 주소.
+pub const DEFAULT_LOCAL_URL: &str = "http://127.0.0.1:8009/v1/systemone";
+const LOCAL_HINT: &str = "scripts/serve-local.sh로 로컬 서버를 띄웠는지 확인하세요";
 pub const UNKNOWN_BACKEND: &str = "DECIDE_BACKEND는 typesafe 또는 local이어야 합니다";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -67,26 +69,16 @@ pub fn decide<T: Transport>(
     let incoming = parse_arguments(raw)?;
     let question = validate(&incoming)?;
     let backend = select_backend(env.backend.as_deref(), env.api_key.as_deref())?;
-    if backend == Backend::Local {
-        let start = millis();
-        let answer = local::infer(&incoming.state, &question)?;
-        let latency_ms = millis() - start;
-        return Ok(DecideResult {
-            answer,
-            routing: json!({
-                "backend": "local",
-                "model": "clef-flash",
-            }),
-            latency_ms,
-        });
-    }
     let (name, label) = labels(backend);
-    if let Some(message) = typesafe::limit_error(&question) {
-        return Err(message.to_string());
+    if backend == Backend::Typesafe {
+        if let Some(message) = typesafe::limit_error(&question) {
+            return Err(message.to_string());
+        }
     }
     let body = typesafe::request_body(&incoming.state, &question);
     let start = millis();
-    let response = typesafe::execute(transport, &body, label, sleep)?;
+    let response = typesafe::execute(transport, &body, label, sleep)
+        .map_err(|err| with_local_hint(backend, err))?;
     let latency_ms = millis() - start;
     let (answer, model) = typesafe::map_response(&response, label)?;
     Ok(DecideResult {
@@ -116,32 +108,18 @@ pub fn decide_many<T: Transport>(
     let incoming = parse_many(raw)?;
     let questions = validate_many(&incoming)?;
     let backend = select_backend(env.backend.as_deref(), env.api_key.as_deref())?;
-    if backend == Backend::Local {
-        let start = millis();
-        let refs: Vec<&Question> = questions.iter().map(|(_, question)| question).collect();
-        let mut answers = Map::new();
-        for ((id, _), answer) in questions.iter().zip(local::infer_many(&incoming.state, &refs)?) {
-            answers.insert(id.clone(), answer);
-        }
-        let latency_ms = millis() - start;
-        return Ok(DecideManyResult {
-            answers: Value::Object(answers),
-            routing: json!({
-                "backend": "local",
-                "model": "clef-flash",
-            }),
-            latency_ms,
-        });
-    }
     let (name, label) = labels(backend);
-    for (id, question) in &questions {
-        if let Some(message) = typesafe::limit_error(question) {
-            return Err(format!("질문 \"{id}\": {message}"));
+    if backend == Backend::Typesafe {
+        for (id, question) in &questions {
+            if let Some(message) = typesafe::limit_error(question) {
+                return Err(format!("질문 \"{id}\": {message}"));
+            }
         }
     }
     let body = typesafe::request_body_many(&incoming.state, &questions);
     let start = millis();
-    let response = typesafe::execute(transport, &body, label, sleep)?;
+    let response = typesafe::execute(transport, &body, label, sleep)
+        .map_err(|err| with_local_hint(backend, err))?;
     let latency_ms = millis() - start;
     let (answers, model) = typesafe::map_answers(&response, &questions, label)?;
     Ok(DecideManyResult {
@@ -160,7 +138,30 @@ fn resolved_typesafe_url() -> Option<String> {
     env.or_else(|| crate::config::load_from_disk(std::env::var("HOME").ok().as_deref()).0.typesafe_url)
 }
 
+/// `DECIDE_LOCAL_URL` 환경변수, 없으면 config.toml의 `[local].url`, 둘 다 없으면 기본 주소.
+pub fn pick_local_url(env: Option<&str>, file: Option<&str>) -> String {
+    nonempty(env).or_else(|| nonempty(file)).unwrap_or(DEFAULT_LOCAL_URL).to_string()
+}
+
+fn resolved_local_url() -> String {
+    let env = std::env::var("DECIDE_LOCAL_URL").ok();
+    let file = crate::config::load_from_disk(std::env::var("HOME").ok().as_deref()).0.local_url;
+    pick_local_url(env.as_deref(), file.as_deref())
+}
+
+/// 로컬 서버에 연결하지 못했을 때만 서버를 띄우는 방법을 덧붙인다(HTTP 오류는 서버 메시지가 더 정확하다).
+fn with_local_hint(backend: Backend, err: String) -> String {
+    if backend == Backend::Local && err.contains("연결에 실패했습니다") {
+        format!("{err} — {LOCAL_HINT}")
+    } else {
+        err
+    }
+}
+
 pub fn live_transport(env: &Env) -> LiveTransport {
+    if select_backend(env.backend.as_deref(), env.api_key.as_deref()) == Ok(Backend::Local) {
+        return LiveTransport::local(&resolved_local_url());
+    }
     let key = nonempty(env.api_key.as_deref()).unwrap_or("");
     match resolved_typesafe_url() {
         Some(url) => LiveTransport::with_url(url.trim(), key),
@@ -258,68 +259,69 @@ mod tests {
         }
     }
 
-    // 로컬 백엔드는 더 이상 HTTP 전송(`typesafe::execute`)을 타지 않고
-    // `local::infer`를 직접 호출한다 — 가중치 유무에 따라 성공/실패가
-    // 환경마다 다르므로 그 결과는 단정하지 않고, TypeSafe transport가
-    // 호출되지 않았다는 것만 검사한다.
-    // CLEF_WEIGHTS를 존재하지 않는 디렉터리로 고정해 ensure_weights()가
-    // 네트워크 다운로드 없이 즉시 하드 에러를 내게 한다 — CI 환경처럼
-    // CLEF_WEIGHTS도 가중치 캐시도 없는 곳에서 로컬 테스트가 실제로
-    // HuggingFace에서 수 GB를 받으려다 몇 시간씩 멈추는 것을 막는다.
-    fn no_weights_env_guard() -> std::path::PathBuf {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
-            "clef-weights-no-weights-{}-{nanos}",
-            std::process::id()
-        ));
-        std::env::set_var("CLEF_WEIGHTS", &dir);
-        dir
+    fn local_body() -> &'static str {
+        r#"{"model":"kev-4b","answers":{"q":{"type":"noul","noul":0.7}}}"#
     }
 
     #[test]
-    fn local_backend_does_not_call_typesafe() {
-        no_weights_env_guard();
+    fn local_backend_sends_one_request_and_reports_local() {
+        let mut script = ok_script(local_body());
+        let result = decide(&noul(), &env(Some("local"), Some("k")), &mut script, || 0.0, || {})
+            .unwrap();
+        assert_eq!(script.calls.get(), 1);
+        assert_eq!(result.routing["backend"], "local");
+        assert_eq!(result.routing["model"], "kev-4b");
+        assert_eq!(result.answer["noul"], 0.7);
+    }
+
+    #[test]
+    fn local_connection_failure_points_at_the_serve_script_and_does_not_retry() {
         let mut script = Script {
-            responses: vec![],
+            responses: vec![Err("Connection refused".into())],
             calls: Cell::new(0),
         };
-        let _ = decide(
+        let err = decide(
             &noul(),
-            &env(Some("local"), Some("k")),
+            &env(Some("local"), None),
             &mut script,
             || 0.0,
-            || {
-                panic!("로컬은 호출하지 않는다");
-            },
-        );
-        std::env::remove_var("CLEF_WEIGHTS");
-        assert_eq!(script.calls.get(), 0);
+            || panic!("재시도하면 안 된다"),
+        )
+        .unwrap_err();
+        assert!(err.starts_with("로컬 연결에 실패했습니다"), "{err}");
+        assert!(err.contains("scripts/serve-local.sh"), "{err}");
+        assert!(!err.contains("TypeSafe"), "{err}");
+        assert_eq!(script.calls.get(), 1);
     }
 
     #[test]
-    fn local_skips_the_typesafe_option_limit_but_typesafe_checks_first() {
-        no_weights_env_guard();
-        let mut options = Vec::new();
-        for i in 0..256 {
-            options.push(i.to_string());
-        }
+    fn local_http_error_keeps_the_server_message_without_the_start_hint() {
+        let mut script = Script {
+            responses: vec![Ok(RawResponse {
+                status: 422,
+                body: r#"{"message":"state too long"}"#.into(),
+            })],
+            calls: Cell::new(0),
+        };
+        let err = decide(&noul(), &env(Some("local"), None), &mut script, || 0.0, || {}).unwrap_err();
+        assert_eq!(err, "로컬 요청이 실패했습니다: HTTP 422: state too long");
+    }
+
+    #[test]
+    fn local_sends_the_option_limit_to_the_server_but_typesafe_checks_first() {
+        let options: Vec<String> = (0..256).map(|i| i.to_string()).collect();
         let raw = json!({
             "state": "s",
             "type": "choice",
             "instructions": "어느 쪽?",
             "options": options,
         });
-        let mut script = Script {
-            responses: vec![],
-            calls: Cell::new(0),
-        };
-        let err = decide(&raw, &env(Some("local"), None), &mut script, || 0.0, || {});
-        std::env::remove_var("CLEF_WEIGHTS");
-        assert_ne!(err.unwrap_err(), typesafe::CHOICE_LIMIT);
-        assert_eq!(script.calls.get(), 0);
+        let mut script = ok_script(
+            r#"{"model":"kev-4b","answers":{"q":{"type":"choice","choice":"0","probabilities":{"0":1.0},"confidence":1.0}}}"#,
+        );
+        let result = decide(&raw, &env(Some("local"), None), &mut script, || 0.0, || {}).unwrap();
+        assert_eq!(result.answer["choice"], "0");
+        assert_eq!(script.calls.get(), 1);
 
         let mut untouched = Script {
             responses: vec![],
@@ -335,6 +337,14 @@ mod tests {
         .unwrap_err();
         assert_eq!(err, typesafe::CHOICE_LIMIT);
         assert_eq!(untouched.calls.get(), 0);
+    }
+
+    #[test]
+    fn local_url_prefers_env_then_file_then_the_default() {
+        assert_eq!(pick_local_url(Some("http://e/x"), Some("http://f/x")), "http://e/x");
+        assert_eq!(pick_local_url(None, Some(" http://f/x ")), "http://f/x");
+        assert_eq!(pick_local_url(Some("  "), None), DEFAULT_LOCAL_URL);
+        assert_eq!(pick_local_url(None, None), DEFAULT_LOCAL_URL);
     }
 
     #[test]
@@ -428,7 +438,7 @@ mod tests {
     }
 
     #[test]
-    fn many_typesafe_limit_names_the_question_but_local_skips_it() {
+    fn many_typesafe_limit_names_the_question_but_local_sends_it() {
         let options: Vec<String> = (0..256).map(|i| i.to_string()).collect();
         let raw = json!({
             "state": "s",
@@ -452,39 +462,31 @@ mod tests {
         assert_eq!(err, format!("질문 \"big\": {}", typesafe::CHOICE_LIMIT));
         assert_eq!(untouched.calls.get(), 0);
 
-        // 로컬은 TypeSafe의 옵션 한도를 거치지 않는다 — 가중치 유무에 따라
-        // 성공/실패가 환경마다 다르므로 결과는 단정하지 않고, TypeSafe
-        // transport가 호출되지 않았다는 것만 확인한다.
-        let mut script = Script {
-            responses: vec![],
-            calls: Cell::new(0),
-        };
-        no_weights_env_guard();
-        let err = decide_many(&raw, &env(Some("local"), None), &mut script, || 0.0, || {});
-        std::env::remove_var("CLEF_WEIGHTS");
-        assert_ne!(
-            err.unwrap_err(),
-            format!("질문 \"big\": {}", typesafe::CHOICE_LIMIT)
+        // 로컬은 TypeSafe의 옵션 한도를 거치지 않고 서버로 보낸다.
+        let mut script = ok_script(
+            r#"{"model":"kev-4b","answers":{"small":{"type":"noul","noul":0.5},"big":{"type":"choice","choice":"0","probabilities":{"0":1.0},"confidence":1.0}}}"#,
         );
-        assert_eq!(script.calls.get(), 0);
+        let result = decide_many(&raw, &env(Some("local"), None), &mut script, || 0.0, || {}).unwrap();
+        assert_eq!(result.answers["big"]["choice"], "0");
+        assert_eq!(script.calls.get(), 1);
     }
 
     #[test]
-    fn many_local_does_not_call_typesafe_and_typesafe_fails_entirely_on_missing_answer() {
-        no_weights_env_guard();
-        let mut local_script = Script {
-            responses: vec![],
-            calls: Cell::new(0),
-        };
-        let _ = decide_many(
+    fn many_local_sends_all_questions_in_one_request_and_typesafe_fails_entirely_on_missing_answer() {
+        let mut local_script = ok_script(
+            r#"{"model":"kev-4b","answers":{"urgent":{"type":"noul","noul":0.8},"team":{"type":"choice","choice":"infra","probabilities":{"infra":0.9,"app":0.1},"confidence":0.8}}}"#,
+        );
+        let result = decide_many(
             &many_raw(),
             &env(Some("local"), None),
             &mut local_script,
             || 0.0,
             || panic!("재시도하면 안 된다"),
-        );
-        std::env::remove_var("CLEF_WEIGHTS");
-        assert_eq!(local_script.calls.get(), 0);
+        )
+        .unwrap();
+        assert_eq!(local_script.calls.get(), 1);
+        assert_eq!(result.routing["backend"], "local");
+        assert_eq!(result.answers["team"]["choice"], "infra");
 
         let mut partial = ok_script(
             r#"{"model":"m","answers":{"urgent":{"type":"noul","noul":0.8}}}"#,

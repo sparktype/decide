@@ -1,6 +1,6 @@
-// bash-risk 게이트 질문의 판정 품질을 실제 모델로 재는 평가(가중치가 필요해 기본 스위트에서 뺀다)
+// bash-risk 게이트 질문의 판정 품질을 실제 모델로 재는 평가(서버가 떠 있어야 해서 기본 스위트에서 뺀다)
 //
-// 실행: CLEF_WEIGHTS=~/.cache/decide/clef-flash-8bit \
+// 실행: scripts/serve-local.sh &   # 로컬 서버를 먼저 띄운다(`DECIDE_LOCAL_URL`로 주소를 바꿀 수 있다)
 //       cargo test --test gate_eval -- --ignored --nocapture --test-threads=1
 //
 // 개발용 세트는 질문 문장과 임계값을 다듬을 때 쓰고, 처음 보는 검증용 세트는 그 조정이 끝난 뒤 한 번 돌려

@@ -41,7 +41,7 @@ decide {VERSION} - choice, score, noul 판단을 내리는 MCP 도구
 환경 변수:
   DECIDE_BACKEND     typesafe 또는 local. 백엔드를 고른다
   TYPESAFE_API_KEY   있고 백엔드를 안 고르면 TypeSafe Jev를 쓴다
-  CLEF_WEIGHTS       로컬 가중치 디렉터리(없으면 HuggingFace에서 받는다)
+  DECIDE_LOCAL_URL   local 서버 주소(기본 http://127.0.0.1:8009/v1/systemone)
 
 예:
   decide install --claude    MCP 등록과 훅 설치를 한 번에 한다
@@ -168,7 +168,7 @@ mod tests {
             "-V, --version",
             "DECIDE_BACKEND",
             "TYPESAFE_API_KEY",
-            "CLEF_WEIGHTS",
+            "DECIDE_LOCAL_URL",
             "decide <명령> --help",
             "decide install --claude",
         ] {

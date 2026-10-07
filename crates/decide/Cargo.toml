@@ -1,8 +1,8 @@
 [package]
 name = "decide"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2021"
-description = "Choice, score, and noul decisions via TypeSafe Jev or a local model"
+description = "Choice, score, and noul decisions via TypeSafe Jev or a local System One server"
 publish = false
 
 [[bin]]
@@ -14,14 +14,5 @@ libc = "0.2"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 ureq = { version = "2.12", default-features = false, features = ["tls", "json"] }
-candle-core = { version = "0.9", features = ["accelerate"] }
-candle-nn = { version = "0.9", features = ["accelerate"] }
-tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
-hf-hub = { version = "0.5", default-features = false, features = ["ureq"] }
-mlx-rs = "0.32"
-mlx-sys = "0.6"
 toml = "0.8"
 tiny_http = "0.12"
-
-[features]
-parity = []

@@ -233,21 +233,7 @@ fn serve_uds_with_activity(
     Ok(())
 }
 
-/// 로컬 백엔드로 해석되면 백그라운드에서 모델을 미리 올린다. 서빙은 막지 않는다 —
-/// 선로딩 중 들어온 요청은 백본 락에서 기다린다.
-fn preload_local_backend() {
-    let env = Env::from_process();
-    if select_backend(env.backend.as_deref(), env.api_key.as_deref()) == Ok(Backend::Local) {
-        std::thread::spawn(|| {
-            if let Err(err) = crate::local::warmup() {
-                eprintln!("로컬 모델 선로딩에 실패했습니다: {err}");
-            }
-        });
-    }
-}
-
 pub fn serve_default() -> std::io::Result<()> {
-    preload_local_backend();
     serve_unified(&default_socket_path(), DEFAULT_HTTP_ADDR, Duration::from_secs(30 * 60))
 }
 
@@ -368,29 +354,23 @@ mod tests {
         assert_eq!(parsed["routing"]["backend"], "typesafe");
         assert!(parsed["latency_ms"].is_number());
 
-        // 로컬 백엔드는 더 이상 HTTP transport(`script`)를 거치지 않고
-        // `local::infer`를 직접 호출한다 — 가중치 유무에 따라 성공/실패가
-        // 환경마다 다르므로 응답 모양은 단정하지 않고, transport가 추가로
-        // 호출되지 않았다는 것만 확인한다.
-        // CLEF_WEIGHTS를 없는 디렉터리로 고정해, 이 테스트만 단독으로 돌려도 HuggingFace에서
-        // 가중치(약 10GB)를 받으려 하지 않고 즉시 하드 에러가 나게 한다(backend.rs 테스트와 같은 방식).
-        std::env::set_var(
-            "CLEF_WEIGHTS",
-            std::env::temp_dir().join(format!("clef-weights-daemon-no-weights-{}", std::process::id())),
-        );
         let env = Env {
             backend: Some("local".into()),
             api_key: None,
         };
-        let _ = handle_line(
+        // 로컬도 같은 transport를 타고, 백엔드가 다르니 위 TypeSafe 응답을 캐시에서 받지 않는다.
+        let line = handle_line(
             r#"{"state":"s","type":"noul","instructions":"참인가?"}"#,
             &env,
             &mut script,
             &mut cache,
         )
         .unwrap();
+        let parsed: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(parsed["routing"]["backend"], "local");
+        assert_eq!(parsed["routing"].get("cached"), None);
         assert!(handle_line("\n", &env, &mut script, &mut cache).is_none());
-        assert_eq!(script.calls.get(), 1);
+        assert_eq!(script.calls.get(), 2);
     }
 
     #[test]

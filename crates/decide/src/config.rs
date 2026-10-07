@@ -1,6 +1,6 @@
-// decide 전체 설정 파일(~/.config/decide/config.toml): 백엔드 선택, TypeSafe 키,
-// 로컬 가중치 경로, HuggingFace 환경을 담는다. 이 모듈은 환경변수를 모른다 —
-// 환경변수와의 우선순위는 호출부(backend.rs, local/mod.rs)가 정한다.
+// decide 전체 설정 파일(~/.config/decide/config.toml): 백엔드 선택, TypeSafe 키와 주소,
+// 로컬 서버 주소를 담는다. 이 모듈은 환경변수를 모른다 —
+// 환경변수와의 우선순위는 호출부(backend.rs)가 정한다.
 use serde::Deserialize;
 use std::path::PathBuf;
 
@@ -9,11 +9,7 @@ pub struct FileConfig {
     pub backend: Option<String>,
     pub typesafe_api_key: Option<String>,
     pub typesafe_url: Option<String>,
-    pub local_weights: Option<String>,
-    pub local_repo: Option<String>,
-    pub local_hf_endpoint: Option<String>,
-    pub local_hf_home: Option<String>,
-    pub local_hf_token: Option<String>,
+    pub local_url: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -33,14 +29,10 @@ struct RawTypesafe {
 
 #[derive(Debug, Default, Deserialize)]
 struct RawLocal {
-    weights: Option<String>,
-    repo: Option<String>,
-    hf_endpoint: Option<String>,
-    hf_home: Option<String>,
-    hf_token: Option<String>,
+    url: Option<String>,
 }
 
-/// 공백만 있는 값은 미설정으로 본다(`CLEF_WEIGHTS` 처리와 같은 규칙).
+/// 공백만 있는 값은 미설정으로 본다.
 fn nonblank(value: Option<String>) -> Option<String> {
     value.filter(|v| !v.trim().is_empty())
 }
@@ -51,11 +43,7 @@ fn parse(text: &str) -> Result<FileConfig, String> {
         backend: nonblank(raw.backend),
         typesafe_api_key: nonblank(raw.typesafe.api_key),
         typesafe_url: nonblank(raw.typesafe.url),
-        local_weights: nonblank(raw.local.weights),
-        local_repo: nonblank(raw.local.repo),
-        local_hf_endpoint: nonblank(raw.local.hf_endpoint),
-        local_hf_home: nonblank(raw.local.hf_home),
-        local_hf_token: nonblank(raw.local.hf_token),
+        local_url: nonblank(raw.local.url),
     })
 }
 
@@ -155,11 +143,7 @@ api_key = "sk-test"
 url = "http://127.0.0.1:8009/v1/systemone"
 
 [local]
-weights = "/path/to/weights"
-repo = "mlx-community/clef-flash-4bit"
-hf_endpoint = "https://nexus.example/hf"
-hf_home = "/path/to/cache"
-hf_token = "hf-test"
+url = "http://127.0.0.1:8009/v1/systemone"
 "#,
         )
         .unwrap();
@@ -168,17 +152,7 @@ hf_token = "hf-test"
         assert_eq!(file.backend, Some("local".to_string()));
         assert_eq!(file.typesafe_api_key, Some("sk-test".to_string()));
         assert_eq!(file.typesafe_url, Some("http://127.0.0.1:8009/v1/systemone".to_string()));
-        assert_eq!(file.local_weights, Some("/path/to/weights".to_string()));
-        assert_eq!(
-            file.local_repo,
-            Some("mlx-community/clef-flash-4bit".to_string())
-        );
-        assert_eq!(
-            file.local_hf_endpoint,
-            Some("https://nexus.example/hf".to_string())
-        );
-        assert_eq!(file.local_hf_home, Some("/path/to/cache".to_string()));
-        assert_eq!(file.local_hf_token, Some("hf-test".to_string()));
+        assert_eq!(file.local_url, Some("http://127.0.0.1:8009/v1/systemone".to_string()));
         let _ = std::fs::remove_dir_all(&home);
     }
 
@@ -192,14 +166,14 @@ hf_token = "hf-test"
 backend = ""
 
 [local]
-weights = "   "
+url = "   "
 "#,
         )
         .unwrap();
         let (file, warnings) = load_from_disk(Some(home.to_str().unwrap()));
         assert!(warnings.is_empty(), "{warnings:?}");
         assert_eq!(file.backend, None);
-        assert_eq!(file.local_weights, None);
+        assert_eq!(file.local_url, None);
         let _ = std::fs::remove_dir_all(&home);
     }
 
@@ -225,7 +199,8 @@ backend = "local"
 future_key = "whatever"
 
 [local]
-weights = "/w"
+url = "http://h/v1/systemone"
+weights = "/removed/key"
 also_future = 42
 "#,
         )
@@ -233,7 +208,7 @@ also_future = 42
         let (file, warnings) = load_from_disk(Some(home.to_str().unwrap()));
         assert!(warnings.is_empty(), "{warnings:?}");
         assert_eq!(file.backend, Some("local".to_string()));
-        assert_eq!(file.local_weights, Some("/w".to_string()));
+        assert_eq!(file.local_url, Some("http://h/v1/systemone".to_string()));
         let _ = std::fs::remove_dir_all(&home);
     }
 
