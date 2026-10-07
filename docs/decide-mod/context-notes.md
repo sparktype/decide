@@ -39,3 +39,6 @@
 - 표시하는 값은 데몬이 실제로 쥔 설정이다. `ps eww`로 실행 중 데몬의 `DECIDE_BACKEND`, `DECIDE_TYPESAFE_URL`, `DECIDE_LOCAL_REPO`, `CLEF_WEIGHTS`를 읽고, 없으면 `~/.config/decide/config.toml`, 그다음 기본값 순이다(`resolveRoute`). 이 순서는 `backend.rs`의 `resolved_typesafe_url`(환경변수, 설정 파일)과 같다. 백엔드를 키 유무로 고르는 규칙은 CLAUDE.md의 설명이고 코드로 대조하지는 않았다.
 - 비밀은 화면에 내지 않는다. `TYPESAFE_API_KEY`는 값이 아니라 존재 여부(개수)만 읽고, URL의 `user:pass@`는 지운다.
 - 한계. 데몬이 꺼져 있으면 환경변수를 읽을 수 없어 config.toml과 기본값으로만 추정하고 `데몬 ○ 꺼짐`을 함께 보인다. 이 경우 실제 새 데몬이 쥘 환경과 다를 수 있다.
+
+## 2026-10-07 막대를 얇게
+- 누적 막대 문자를 `█`(전체 블록)에서 `━`(굵은 가로선)으로 바꿨다. 한 줄 높이의 가는 선으로 그려지고 색과 칸 수 계산은 그대로다. 더 두꺼운 중간 두께가 필요하면 `▄`(아래 반 블록)를 쓴다.
