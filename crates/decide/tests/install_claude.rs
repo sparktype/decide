@@ -69,7 +69,7 @@ fn claude_flag_registers_the_mcp_server_then_adds_the_hooks() {
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     let args = std::fs::read_to_string(&log).unwrap();
     assert!(
-        args.contains("mcp add -s user --transport http decide http://127.0.0.1:48080/mcp"),
+        args.contains("mcp add -s user decide -- /opt/homebrew/bin/decide mcp"),
         "{args}"
     );
     let settings = dir.join(".claude").join("settings.json");
@@ -78,6 +78,20 @@ fn claude_flag_registers_the_mcp_server_then_adds_the_hooks() {
         json!({"hooks": {"PostToolUse": [our_group()], "PreToolUse": [gate_group()]}})
     );
     assert!(String::from_utf8_lossy(&output.stdout).contains("훅을 등록했습니다"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn an_existing_registration_is_success_and_points_at_the_migration() {
+    let dir = temp_dir("exists");
+    let bin = fake_claude(&dir, "#!/bin/sh\necho 'MCP server decide already exists in user config' >&2\nexit 1\n");
+    let output = run(&["install"], &dir, &bin);
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("claude mcp remove -s user decide"),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 

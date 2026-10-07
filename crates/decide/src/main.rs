@@ -249,18 +249,11 @@ fn reject_extra(extra: Option<String>) {
     }
 }
 
-/// `claude mcp add`에 넘길 인자. HTTP transport로 고정 포트(daemon::DEFAULT_HTTP_ADDR)에 등록한다.
+/// `claude mcp add`에 넘길 인자. stdio로 `decide mcp`를 등록하므로 Claude Code가 세션마다 직접 띄운다.
 fn install_mcp_args() -> Vec<String> {
-    vec![
-        "mcp".to_string(),
-        "add".to_string(),
-        "-s".to_string(),
-        "user".to_string(),
-        "--transport".to_string(),
-        "http".to_string(),
-        "decide".to_string(),
-        format!("http://{}/mcp", daemon::DEFAULT_HTTP_ADDR),
-    ]
+    ["mcp", "add", "-s", "user", "decide", "--", DECIDE_BIN, "mcp"]
+        .map(String::from)
+        .to_vec()
 }
 
 fn run_install() -> io::Result<()> {
@@ -286,16 +279,10 @@ fn run_install() -> io::Result<()> {
         .iter()
         .any(|bytes| String::from_utf8_lossy(bytes).contains("already exists"));
     if already_registered {
+        println!("이미 등록돼 있습니다. 예전 HTTP 방식 등록이면 `claude mcp remove -s user decide` 뒤에 다시 `decide install`을 실행하세요.");
         return Ok(());
     }
     Err(io::Error::other("claude mcp add 실행이 실패했습니다"))
-}
-
-/// http_addr가 이미 쓰이고 있지 않으면 spawn을 호출한다(실제로는 decide daemon을 띄움).
-fn spawn_daemon_if_needed(http_addr: &str, spawn: &mut dyn FnMut()) {
-    if !decide::http::http_port_in_use(http_addr) {
-        spawn();
-    }
 }
 
 fn run_install_claude() -> io::Result<()> {
@@ -307,11 +294,6 @@ fn run_install_claude() -> io::Result<()> {
         Installed::Added => println!("훅을 등록했습니다(결과 표시, bash-risk 게이트): {}", path.display()),
         Installed::AlreadyPresent => println!("훅이 이미 등록돼 있습니다: {}", path.display()),
     }
-    spawn_daemon_if_needed(daemon::DEFAULT_HTTP_ADDR, &mut || {
-        if decide::gate::client::spawn_daemon().is_ok() {
-            println!("decide daemon을 띄웠습니다 (http://{}/mcp)", daemon::DEFAULT_HTTP_ADDR);
-        }
-    });
     Ok(())
 }
 
@@ -351,41 +333,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn install_mcp_args_register_http_transport_at_the_fixed_port() {
+    fn install_mcp_args_register_the_stdio_command() {
         let args = install_mcp_args();
         assert_eq!(
             args,
-            vec![
-                "mcp", "add", "-s", "user", "--transport", "http", "decide",
-                "http://127.0.0.1:48080/mcp",
-            ]
+            vec!["mcp", "add", "-s", "user", "decide", "--", "/opt/homebrew/bin/decide", "mcp"]
         );
-    }
-
-    #[test]
-    fn spawn_daemon_if_needed_skips_when_the_port_is_already_bound() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
-        let mut spawned = 0;
-        spawn_daemon_if_needed(&addr, &mut || spawned += 1);
-        assert_eq!(spawned, 0, "포트가 이미 쓰이고 있으면 다시 띄우지 않는다");
-    }
-
-    #[test]
-    fn spawn_daemon_if_needed_spawns_when_the_port_is_free() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = format!("127.0.0.1:{}", listener.local_addr().unwrap().port());
-        drop(listener); // 포트를 비운다.
-        let freed = (0..20).any(|_| {
-            let ok = !decide::http::http_port_in_use(&addr);
-            if !ok {
-                std::thread::sleep(std::time::Duration::from_millis(20));
-            }
-            ok
-        });
-        assert!(freed, "포트가 해제되지 않았다");
-        let mut spawned = 0;
-        spawn_daemon_if_needed(&addr, &mut || spawned += 1);
-        assert_eq!(spawned, 1);
     }
 }

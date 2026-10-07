@@ -14,8 +14,8 @@ fn mcp_json_and_stop_hook_use_the_homebrew_binary() {
     let config: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(root.join(".mcp.json")).unwrap()).unwrap();
     let decide = &config["mcpServers"]["decide"];
-    assert_eq!(decide["type"], "http");
-    assert_eq!(decide["url"], "http://127.0.0.1:48080/mcp");
+    assert_eq!(decide["command"], "/opt/homebrew/bin/decide");
+    assert_eq!(decide["args"], serde_json::json!(["mcp"]));
 
     let binary = Path::new("/opt/homebrew/bin/decide");
     let meta = std::fs::metadata(binary).unwrap();

@@ -1,8 +1,10 @@
 {
   "mcpServers": {
     "decide": {
-      "type": "http",
-      "url": "http://127.0.0.1:48080/mcp"
+      "command": "/opt/homebrew/bin/decide",
+      "args": [
+        "mcp"
+      ]
     },
     "graft": {
       "command": "graft",

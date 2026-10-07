@@ -83,8 +83,9 @@ stdio로 MCP 서버를 실행한다.
             "\
 사용법: decide install [--claude]
 
-Claude Code 사용자 스코프에 decide MCP 서버를 등록한다.
-이미 등록돼 있으면 성공으로 끝난다.
+Claude Code 사용자 스코프에 decide MCP 서버를 stdio(decide mcp)로
+등록한다. 이미 등록돼 있으면 그대로 두고 성공으로 끝난다. 예전 HTTP
+등록을 옮기려면 claude mcp remove -s user decide 뒤에 다시 실행한다.
 
 옵션:
   --claude   MCP 등록에 더해 훅도 사용자 설정(settings.json)에 넣는다.
