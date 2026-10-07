@@ -93,3 +93,6 @@
 
 ## 2026-10-07 라벨 첫 글자를 대문자로
 - 패널의 박스 제목, 범례 라벨, 머리줄 오른쪽 문구, 지연 노트의 첫 글자를 대문자로 바꿨다(`Backend`, `Decide gate`, `Decision path`, `Latency`, `Allow/Ask/Deny`, `Static rule/Prefilter/Model/Fail-open`, `Daemon`, `Avg 5m`, `Samples · P90 · Max`). 집계 키(`model`, `static rule` 등)와 백엔드 이름, URL, 출처 `(env)` 같은 데이터 값은 그대로다. 상태 줄, 토스트, 밴드는 이번에 바꾸지 않았다.
+
+## 2026-10-07 backend 박스 본문을 한 줄로
+- backend 박스 본문을 `typesafe (https://api.typesafe.ai/v1/systemone)` 한 줄로 줄였다(이모지 `🌐`/`🧠`와 출처 괄호 `(env)`, `(default)` 삭제). 출처(환경변수, config.toml, 기본값) 정보는 화면에서 사라졌으므로, 값이 어디서 왔는지는 이 문서의 `resolveRoute` 우선순위로만 알 수 있다. `Route`의 `backendSource`, `targetSource`는 계산만 하고 쓰지 않는다.
