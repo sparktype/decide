@@ -99,7 +99,11 @@ or `.claude/settings.json`, restart Claude Code.
   fail before the request.
 - `backend.rs` sends the local backend through the same `typesafe::execute` path as TypeSafe:
   `live_transport` picks `LiveTransport::local(url)` (no auth header; `pick_local_url` orders
-  `DECIDE_LOCAL_URL`, `[local].url`, `DEFAULT_LOCAL_URL`) when the backend resolves to local. The
+  `DECIDE_LOCAL_URL`, `[local].url`, `DEFAULT_LOCAL_URL`) when the backend resolves to local.
+  `model_for`/`pick_local_model` orders `DECIDE_MODEL`, `[local].model`, `typesafe::MODEL` for the
+  request body's `model` field on local only; TypeSafe always sends `typesafe::MODEL`. Kev echoes
+  whatever alias it is sent, so this changes the request and the echoed `routing.model`, not which
+  weights the server actually runs (that is `KEV_MODEL` at server startup, `scripts/serve-local.sh`). The
   255-option and 10-level limits are checked before the request for TypeSafe only; the local server
   decides for itself. A connection failure on local gets `with_local_hint` appended
   (`scripts/serve-local.sh`); an HTTP error keeps the server's message. `decide_many` on local is one

@@ -75,7 +75,7 @@ pub fn decide<T: Transport>(
             return Err(message.to_string());
         }
     }
-    let body = typesafe::request_body(&incoming.state, &question);
+    let body = typesafe::request_body(&model_for(backend), &incoming.state, &question);
     let start = millis();
     let response = typesafe::execute(transport, &body, label, sleep)
         .map_err(|err| with_local_hint(backend, err))?;
@@ -98,6 +98,14 @@ fn labels(backend: Backend) -> (&'static str, &'static str) {
     }
 }
 
+/// 요청에 실어 보낼 모델. TypeSafe는 `typesafe::MODEL`로 고정, local은 config.toml/환경변수로 바뀐다.
+fn model_for(backend: Backend) -> String {
+    match backend {
+        Backend::Typesafe => typesafe::MODEL.to_string(),
+        Backend::Local => resolved_local_model(),
+    }
+}
+
 pub fn decide_many<T: Transport>(
     raw: &Value,
     env: &Env,
@@ -116,7 +124,7 @@ pub fn decide_many<T: Transport>(
             }
         }
     }
-    let body = typesafe::request_body_many(&incoming.state, &questions);
+    let body = typesafe::request_body_many(&model_for(backend), &incoming.state, &questions);
     let start = millis();
     let response = typesafe::execute(transport, &body, label, sleep)
         .map_err(|err| with_local_hint(backend, err))?;
@@ -147,6 +155,17 @@ fn resolved_local_url() -> String {
     let env = std::env::var("DECIDE_LOCAL_URL").ok();
     let file = crate::config::load_from_disk(std::env::var("HOME").ok().as_deref()).0.local_url;
     pick_local_url(env.as_deref(), file.as_deref())
+}
+
+/// `DECIDE_MODEL` 환경변수, 없으면 config.toml의 `[local].model`, 둘 다 없으면 `typesafe::MODEL`.
+pub fn pick_local_model(env: Option<&str>, file: Option<&str>) -> String {
+    nonempty(env).or_else(|| nonempty(file)).unwrap_or(typesafe::MODEL).to_string()
+}
+
+fn resolved_local_model() -> String {
+    let env = std::env::var("DECIDE_MODEL").ok();
+    let file = crate::config::load_from_disk(std::env::var("HOME").ok().as_deref()).0.local_model;
+    pick_local_model(env.as_deref(), file.as_deref())
 }
 
 /// 로컬 서버에 연결하지 못했을 때만 서버를 띄우는 방법을 덧붙인다(HTTP 오류는 서버 메시지가 더 정확하다).
@@ -345,6 +364,44 @@ mod tests {
         assert_eq!(pick_local_url(None, Some(" http://f/x ")), "http://f/x");
         assert_eq!(pick_local_url(Some("  "), None), DEFAULT_LOCAL_URL);
         assert_eq!(pick_local_url(None, None), DEFAULT_LOCAL_URL);
+    }
+
+    #[test]
+    fn local_model_prefers_env_then_file_then_jev_latest() {
+        assert_eq!(pick_local_model(Some("kev-8b"), Some("kev-4b")), "kev-8b");
+        assert_eq!(pick_local_model(None, Some(" kev-4b ")), "kev-4b");
+        assert_eq!(pick_local_model(Some("  "), None), typesafe::MODEL);
+        assert_eq!(pick_local_model(None, None), typesafe::MODEL);
+    }
+
+    #[test]
+    fn local_sends_the_configured_model_but_typesafe_always_sends_jev_latest() {
+        struct Capture {
+            model: std::cell::RefCell<Option<String>>,
+        }
+        impl Transport for Capture {
+            fn post_json(&mut self, body: &Value) -> Result<RawResponse, String> {
+                *self.model.borrow_mut() = body["model"].as_str().map(str::to_string);
+                Ok(RawResponse {
+                    status: 200,
+                    body: local_body().into(),
+                })
+            }
+        }
+
+        std::env::set_var("DECIDE_MODEL", "kev-8b");
+        let mut capture = Capture {
+            model: std::cell::RefCell::new(None),
+        };
+        decide(&noul(), &env(Some("local"), None), &mut capture, || 0.0, || {}).unwrap();
+        assert_eq!(capture.model.borrow().as_deref(), Some("kev-8b"));
+
+        let mut capture = Capture {
+            model: std::cell::RefCell::new(None),
+        };
+        decide(&noul(), &env(Some("typesafe"), Some("k")), &mut capture, || 0.0, || {}).unwrap();
+        assert_eq!(capture.model.borrow().as_deref(), Some(typesafe::MODEL));
+        std::env::remove_var("DECIDE_MODEL");
     }
 
     #[test]

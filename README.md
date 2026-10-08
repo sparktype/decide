@@ -289,9 +289,12 @@ url = "http://127.0.0.1:8009/v1/systemone"   # DECIDE_TYPESAFE_URL과 같은 뜻
 
 [local]
 url = "http://127.0.0.1:8009/v1/systemone"   # DECIDE_LOCAL_URL과 같은 뜻(기본값과 같다)
+model = "kev-8b"                             # DECIDE_MODEL과 같은 뜻(기본값은 jev-latest)
 ```
 
 `[typesafe].url`(또는 `DECIDE_TYPESAFE_URL`)은 TypeSafe 대신 같은 System One 형식을 말하는 원격 서버로 보낸다. 같은 기기의 Kev는 `[local].url`로 가리킨다. 서버 실행, 확인, 오프라인 반입은 [Kev로 decide 돌리기](docs/kev-setup.md)에 있다.
+
+`[local].model`(또는 `DECIDE_MODEL`)은 local 요청의 `model` 필드와 그걸 그대로 돌려받는 `routing.model` 표시값만 바꾼다. TypeSafe는 모델 선택이 없어 항상 `jev-latest`를 보낸다. Kev는 이 필드를 요청받은 그대로 echo할 뿐 서버가 실제로 추론에 쓰는 모델을 바꾸지 않는다 — 실제 서빙 모델은 서버를 띄울 때의 `KEV_MODEL`([Kev로 decide 돌리기](docs/kev-setup.md))로 정해진다.
 
 ## 개발
 

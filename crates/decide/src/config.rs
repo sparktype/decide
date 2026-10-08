@@ -10,6 +10,7 @@ pub struct FileConfig {
     pub typesafe_api_key: Option<String>,
     pub typesafe_url: Option<String>,
     pub local_url: Option<String>,
+    pub local_model: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -30,6 +31,7 @@ struct RawTypesafe {
 #[derive(Debug, Default, Deserialize)]
 struct RawLocal {
     url: Option<String>,
+    model: Option<String>,
 }
 
 /// 공백만 있는 값은 미설정으로 본다.
@@ -44,6 +46,7 @@ fn parse(text: &str) -> Result<FileConfig, String> {
         typesafe_api_key: nonblank(raw.typesafe.api_key),
         typesafe_url: nonblank(raw.typesafe.url),
         local_url: nonblank(raw.local.url),
+        local_model: nonblank(raw.local.model),
     })
 }
 
@@ -144,6 +147,7 @@ url = "http://127.0.0.1:8009/v1/systemone"
 
 [local]
 url = "http://127.0.0.1:8009/v1/systemone"
+model = "kev-8b"
 "#,
         )
         .unwrap();
@@ -153,6 +157,7 @@ url = "http://127.0.0.1:8009/v1/systemone"
         assert_eq!(file.typesafe_api_key, Some("sk-test".to_string()));
         assert_eq!(file.typesafe_url, Some("http://127.0.0.1:8009/v1/systemone".to_string()));
         assert_eq!(file.local_url, Some("http://127.0.0.1:8009/v1/systemone".to_string()));
+        assert_eq!(file.local_model, Some("kev-8b".to_string()));
         let _ = std::fs::remove_dir_all(&home);
     }
 

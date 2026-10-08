@@ -54,20 +54,20 @@ fn question_json(question: &Question) -> Value {
     }
 }
 
-pub fn request_body_many(state: &str, questions: &[(String, Question)]) -> Value {
+pub fn request_body_many(model: &str, state: &str, questions: &[(String, Question)]) -> Value {
     let mut map = Map::new();
     for (id, question) in questions {
         map.insert(id.clone(), question_json(question));
     }
     json!({
-        "model": MODEL,
+        "model": model,
         "state": state,
         "questions": Value::Object(map),
     })
 }
 
-pub fn request_body(state: &str, question: &Question) -> Value {
-    request_body_many(state, &[("q".to_string(), question.clone())])
+pub fn request_body(model: &str, state: &str, question: &Question) -> Value {
+    request_body_many(model, state, &[("q".to_string(), question.clone())])
 }
 
 pub fn authorization(key: &str) -> String {
@@ -263,7 +263,7 @@ mod tests {
             criteria: vec![],
         })
         .unwrap();
-        let body = request_body("청구서", &choice);
+        let body = request_body(MODEL, "청구서", &choice);
         assert_eq!(body["model"], "jev-latest");
         assert_eq!(body["state"], "청구서");
         assert_eq!(body["questions"]["q"]["criteria"]["billing"], "billing");
@@ -280,10 +280,10 @@ mod tests {
             criteria: vec!["낮음".into(), "높음".into()],
         })
         .unwrap();
-        let body = request_body("s", &score);
+        let body = request_body(MODEL, "s", &score);
         assert_eq!(body["questions"]["q"]["criteria"], json!(["낮음", "높음"]));
 
-        let body = request_body("s", &noul());
+        let body = request_body(MODEL, "s", &noul());
         assert!(body["questions"]["q"].get("criteria").is_none());
         assert_eq!(authorization("secret"), "Bearer secret");
         assert!(!serde_json::to_string(&body).unwrap().contains("secret"));
@@ -350,7 +350,7 @@ mod tests {
             calls: Cell::new(0),
         };
         let slept = Cell::new(0);
-        let parsed = execute(&mut script, &request_body("s", &noul()), "TypeSafe", || {
+        let parsed = execute(&mut script, &request_body(MODEL, "s", &noul()), "TypeSafe", || {
             slept.set(slept.get() + 1);
         })
         .unwrap();
@@ -376,7 +376,7 @@ mod tests {
         };
         let err = execute(
             &mut overloaded,
-            &request_body("s", &noul()),
+            &request_body(MODEL, "s", &noul()),
             "TypeSafe",
             || {},
         )
@@ -389,7 +389,7 @@ mod tests {
             responses: vec![Err("connection reset".into())],
             calls: Cell::new(0),
         };
-        let err = execute(&mut down, &request_body("s", &noul()), "TypeSafe", || {
+        let err = execute(&mut down, &request_body(MODEL, "s", &noul()), "TypeSafe", || {
             panic!("재시도하면 안 된다")
         })
         .unwrap_err();
@@ -405,7 +405,7 @@ mod tests {
         };
         let err = execute(
             &mut invalid,
-            &request_body("s", &noul()),
+            &request_body(MODEL, "s", &noul()),
             "TypeSafe",
             || panic!("재시도하면 안 된다"),
         )
@@ -433,7 +433,7 @@ mod tests {
 
     #[test]
     fn many_body_keeps_order_and_unicode_ids() {
-        let body = request_body_many("상태", &many_questions());
+        let body = request_body_many(MODEL, "상태", &many_questions());
         assert_eq!(body["model"], "jev-latest");
         assert_eq!(body["state"], "상태");
         let text = serde_json::to_string(&body["questions"]).unwrap();
@@ -446,8 +446,8 @@ mod tests {
     fn single_body_is_the_one_question_case_of_many() {
         let question = noul();
         assert_eq!(
-            request_body("s", &question),
-            request_body_many("s", &[("q".to_string(), question.clone())])
+            request_body(MODEL, "s", &question),
+            request_body_many(MODEL, "s", &[("q".to_string(), question.clone())])
         );
     }
 
