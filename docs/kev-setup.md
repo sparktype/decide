@@ -107,7 +107,7 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"decide_man
 
 ## 운영할 때 알아 둘 점
 
-- **서버 수명은 decide가 관리하지 않는다.** `decide daemon`과 `decide install`은 서버를 띄우지 않는다. 서버가 꺼져 있으면 모든 판단이 연결 실패다. 훅 게이트는 실패를 조용히 통과시키므로(fail-open) 서버가 죽어도 Bash 명령이 막히지 않지만, 판정도 일어나지 않는다. 재부팅 뒤에는 `scripts/serve-local.sh`를 다시 실행한다. 자동 실행은 launchd 등으로 직접 구성해야 하고, 이 저장소는 그 설정을 제공하지 않는다.
+- **서버 수명은 decide가 관리하지 않는다.** `decide daemon`과 `decide install`은 서버를 띄우지 않는다. 서버가 꺼져 있으면 모든 판단이 연결 실패다. 훅 게이트는 실패를 조용히 통과시키므로(fail-open) 서버가 죽어도 Bash 명령이 막히지 않지만, 판정도 일어나지 않는다. 재부팅 뒤 자동으로 띄우려면 `scripts/install-launchd.sh`로 launchd 사용자 에이전트(`dev.sparktype.kev`)에 등록한다 — `kev.serve`를 직접 실행하도록 plist를 쓰고(`serve-local.sh`는 거치지 않는다. launchd `KeepAlive`가 재시작할 때마다 clone/`uv sync`를 다시 하지 않도록), 로그인 때 `RunAtLoad`로 올라오고 비정상 종료 시 `KeepAlive`로 재시작한다. HMG 사내망처럼 SSL 인터셉트가 있으면 현재 셸의 `SSL_CERT_FILE`/`REQUESTS_CA_BUNDLE`/`CURL_CA_BUNDLE`/`UV_CERT`/`UV_SYSTEM_CERTS`/`NODE_EXTRA_CA_CERTS`를 읽어 plist에 심는다(launchd는 로그인 셸의 환경변수를 물려받지 않는다). 로그는 `~/Library/Logs/dev.sparktype.kev.log`, 상태는 `launchctl print gui/$(id -u)/dev.sparktype.kev`, 제거는 `scripts/install-launchd.sh --uninstall`. `KEV_MODEL`/`DECIDE_LOCAL_PORT`/`KEV_REF`/`KEV_DIR` 환경변수는 `serve-local.sh`와 같다.
 - **모델 이름이 `jev-latest`로 나온다.** `routing.backend`는 `local`이지만 `routing.model`은 서버가 돌려준 값이고, Kev는 요청의 모델 별칭(`jev-latest`)을 그대로 돌려준다. 실제로는 로컬 Kev가 답한 것이다.
 - **결과는 두 백엔드를 섞어 비교하지 않는다.** 확률 보정이 다르다.
 - **같은 기기 안에서 끝난다.** 주소가 `127.0.0.1`이면 게이트가 보내는 명령과 state도 기기 밖으로 나가지 않는다.
